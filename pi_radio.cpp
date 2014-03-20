@@ -82,24 +82,22 @@ void getRealMemPage(void** vAddr, void** pAddr) {
     unsigned long long frameinfo;
 
     int fp = open("/proc/self/pagemap", 'r');
-    lseek(fp, ((int)a)/4096*8, SEEK_SET);
+    lseek(fp, ((int)a) / 4096 * 8, SEEK_SET);
     read(fp, &frameinfo, sizeof(frameinfo));
 
-    *pAddr = (void*)((int)(frameinfo*4096));
+    *pAddr = (void*)((int)(frameinfo * 4096));
 }
 
+
 void freeRealMemPage(void* vAddr) {
-
     munlock(vAddr, 4096);  // unlock ram.
-
     free(vAddr);
 }
 
-void setup_fm()
-{
 
+void setup_fm() {
     /* open /dev/mem */
-    if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
+    if ((mem_fd = open("/dev/mem", O_RDWR | O_SYNC) ) < 0) {
         fprintf(stderr, "can't open /dev/mem \n");
         exit (-1);
     }
@@ -107,13 +105,15 @@ void setup_fm()
     allof7e = (unsigned *)mmap(
                   NULL,
                   0x01000000,  //len
-                  PROT_READ|PROT_WRITE,
+                  PROT_READ | PROT_WRITE,
                   MAP_SHARED,
                   mem_fd,
                   0x20000000  //base
               );
 
-    if ((int)allof7e==-1) exit(-1);
+    if ((int)allof7e == -1) {
+        exit(-1);
+    }
 
     SETBIT(GPFSEL0 , 14);
     CLRBIT(GPFSEL0 , 13);
@@ -132,8 +132,7 @@ void setup_fm()
 }
 
 
-void modulate(int m)
-{
+void modulate(int m) {
     ACCESS(CM_GP0DIV) = (0x5a << 24) + 0x4d72 + m;
 }
 
@@ -173,10 +172,10 @@ struct PageInfo instrs[BUFFERINSTRUCTIONS];
 
 
 
-class SampleSink{
+class SampleSink {
 public:
-    virtual void consume(float*, int){};  // floating point samples
-    virtual void consume(void*, int){};  // raw data, len in bytes.
+    virtual void consume(float*, int) {}; // floating point samples
+    virtual void consume(void*, int) {}; // raw data, len in bytes.
     virtual ~SampleSink() {};
 };
 
@@ -191,13 +190,13 @@ public:
     Outputter(float rate):
         bufPtr_(0),
         clocksPerSample_(22500.0 / rate * 1373.5),  // for timing, determined by experiment
-        sleeptime_((float)1e6 * BUFFERINSTRUCTIONS/4/rate/2),   // sleep time is half of the time to empty the buffer
+        sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / rate / 2), // sleep time is half of the time to empty the buffer
         fracerror_(0),
         timeErr_(0) {
     }
     void consume(float* data, int num) {
-        for (int i=0; i<num; i++) {
-            float value = data[i]*8;  // modulation index (AKA volume!)
+        for (int i = 0; i < num; i++) {
+            float value = data[i] * 8; // modulation index (AKA volume!)
 
             // dump raw baseband data to stdout for audacity analysis.
             //write(1, &value, 4);
@@ -213,14 +212,14 @@ public:
             value += fracerror_;  // error that couldn't be encoded from last time.
 
             int intval = (int)(round(value));  // integer component
-            float frac = (value - (float)intval + 1)/2;
-            unsigned int fracval = round(frac*clocksPerSample_); // the fractional component
+            float frac = (value - (float)intval + 1) / 2;
+            unsigned int fracval = round(frac * clocksPerSample_); // the fractional component
 
             // we also record time error so that if one sample is output
             // for slightly too long, the next sample will be shorter.
             timeErr_ = timeErr_ - int(timeErr_) + clocksPerSample_;
 
-            fracerror_ = (frac - (float)fracval*(1.0-2.3/clocksPerSample_)/clocksPerSample_)*2;  // error to feed back for delta sigma
+            fracerror_ = (frac - (float)fracval * (1.0 - 2.3 / clocksPerSample_) / clocksPerSample_) * 2; // error to feed back for delta sigma
 
             // Note, the 2.3 constant is because our PWM isn't perfect.
             // There is a finite time for the DMA controller to load a new value from memory,
@@ -235,25 +234,25 @@ public:
             static int time;
             time++;
 
-            while( (ACCESS(DMABASE + 0x04 /* CurBlock*/) & ~ 0x7F) ==  (int)(instrs[bufPtr_].p)) {
+            while ( (ACCESS(DMABASE + 0x04 /* CurBlock*/) & ~ 0x7F) ==  (int)(instrs[bufPtr_].p)) {
                 usleep(sleeptime_);  // are we anywhere in the next 4 instructions?
             }
 
             // Create DMA command to set clock controller to output FM signal for PWM "LOW" time.
-            ((CB*)(instrs[bufPtr_].v))->SOURCE_AD = (int)constPage.p + 2048 + intval*4 - 4 ;
+            ((CB*)(instrs[bufPtr_].v))->SOURCE_AD = (int)constPage.p + 2048 + intval * 4 - 4 ;
             bufPtr_++;
 
             // Create DMA command to delay using serializer module for suitable time.
-            ((CB*)(instrs[bufPtr_].v))->TXFR_LEN = (int)timeErr_-fracval;
+            ((CB*)(instrs[bufPtr_].v))->TXFR_LEN = (int)timeErr_ - fracval;
             bufPtr_++;
 
             // Create DMA command to set clock controller to output FM signal for PWM "HIGH" time.
-            ((CB*)(instrs[bufPtr_].v))->SOURCE_AD = (int)constPage.p + 2048 + intval*4 + 4;
+            ((CB*)(instrs[bufPtr_].v))->SOURCE_AD = (int)constPage.p + 2048 + intval * 4 + 4;
             bufPtr_++;
 
             // Create DMA command for more delay.
             ((CB*)(instrs[bufPtr_].v))->TXFR_LEN = fracval;
-            bufPtr_=(bufPtr_+1) % (BUFFERINSTRUCTIONS);
+            bufPtr_ = (bufPtr_ + 1) % (BUFFERINSTRUCTIONS);
         }
     }
 };
@@ -273,10 +272,10 @@ public:
 
 
     void consume(float* data, int num) {
-        for (int i=0; i<num; i++) {
+        for (int i = 0; i < num; i++) {
             float value = data[i];
 
-            float sample = value + (dataold_-value) / (1-fmconstant_);  // fir of 1 + s tau
+            float sample = value + (dataold_ - value) / (1 - fmconstant_); // fir of 1 + s tau
 
             next_->consume(&sample, 1);
 
@@ -305,41 +304,42 @@ public:
     Resamp(float rateIn, float rateOut, SampleSink* next):
         dataOld_(),
         sincLUT_(),
-        ratio_((float)rateIn/(float)rateOut),
+        ratio_((float)rateIn / (float)rateOut),
         outTimeLeft_(1.0),
         outBuffer_(),
         outBufPtr_(0),
         next_(next) {
 
-        for(int i=0; i<QUALITY; i++) {  // sample
-          for(int j=0; j<SQUALITY; j++) {  // starttime
-            float x = PI * ((float)j/SQUALITY + (QUALITY-1-i) - (QUALITY-1)/2.0);
-            if (x==0)
-              sincLUT_[j][i] = 1.0;  // sin(0)/(0) == 1, says my limits therory
-            else
-              sincLUT_[j][i] = sin(x)/x;
-          }
+        for (int i = 0; i < QUALITY; i++) { // sample
+            for (int j = 0; j < SQUALITY; j++) { // starttime
+                float x = PI * ((float)j / SQUALITY + (QUALITY - 1 - i) - (QUALITY - 1) / 2.0);
+                if (x == 0) {
+                    sincLUT_[j][i] = 1.0;    // sin(0)/(0) == 1, says my limits therory
+                } else {
+                    sincLUT_[j][i] = sin(x) / x;
+                }
+            }
         }
 
     };
 
 
     void consume(float* data, int num) {
-        for (int i=0; i<num; i++) {
+        for (int i = 0; i < num; i++) {
             // shift old data along
-            for (int j=0; j<QUALITY-1; j++) {
-              dataOld_[j] = dataOld_[j+1];
+            for (int j = 0; j < QUALITY - 1; j++) {
+                dataOld_[j] = dataOld_[j + 1];
             }
 
             // put in new sample
-            dataOld_[QUALITY-1] = data[i];
+            dataOld_[QUALITY - 1] = data[i];
             outTimeLeft_ -= 1.0;
 
             // go output this stuff!
-            while (outTimeLeft_<1.0) {
+            while (outTimeLeft_ < 1.0) {
                 float outSample = 0;
-                int lutNum = (int)(outTimeLeft_*SQUALITY);
-                for (int j=0; j<QUALITY; j++) {
+                int lutNum = (int)(outTimeLeft_ * SQUALITY);
+                for (int j = 0; j < QUALITY; j++) {
                     outSample += dataOld_[j] * sincLUT_[lutNum][j];
                 }
                 outBuffer_[outBufPtr_++] = outSample;
@@ -347,8 +347,8 @@ public:
 
                 // if we have lots of data, shunt it to the next stage.
                 if (outBufPtr_ >= BUFSIZE) {
-                  next_->consume(outBuffer_, outBufPtr_);
-                  outBufPtr_ = 0;
+                    next_->consume(outBuffer_, outBufPtr_);
+                    outBufPtr_ = 0;
                 }
             }
         }
@@ -374,7 +374,7 @@ public:
     Mono(SampleSink* next): next_(next) { }
 
     void consume(void* data, int num) {    // expects num%2 == 0
-        for (int i=0; i<num/2; i++) {
+        for (int i = 0; i < num / 2; i++) {
             float l = (float)(((short*)data)[i]) / 32768.0;
             next_->consume( &l, 1);
         }
@@ -394,11 +394,11 @@ public:
 
 
     void consume(void* data, int num) {    // expects num%4 == 0
-        for (int i=0; i<num/2; i+=2) {
+        for (int i = 0; i < num / 2; i += 2) {
             float l = (float)(((short*)data)[i]) / 32768.0;
             nextLeft_->consume( &l, 1);
 
-            float r = (float)(((short*)data)[i+1]) / 32768.0;
+            float r = (float)(((short*)data)[i + 1]) / 32768.0;
             nextRight_->consume( &r, 1);
         }
     }
@@ -443,27 +443,27 @@ public:
 
     RDSEncoder(SampleSink* next):
         next_(next), bitNum_(0), lastBit_(0), time_(0), lastValue_(0) {
-        for (int i=0; i<8; i++) {
-            sinLut_[i] = sin((float)i*2.0*PI*3/8);
+        for (int i = 0; i < 8; i++) {
+            sinLut_[i] = sin((float)i * 2.0 * PI * 3 / 8);
         }
     }
 
     void consume(float* data, int num) {
-        for (int i=0; i<num; i++) {
+        for (int i = 0; i < num; i++) {
             if (!time_) {
-              // time_ for a new bit
-              int newBit = (RDSDATA[bitNum_/8]>>(7-(bitNum_%8)))&1;
-              lastBit_ = lastBit_^newBit;  // differential encoding
+                // time_ for a new bit
+                int newBit = (RDSDATA[bitNum_ / 8] >> (7 - (bitNum_ % 8))) & 1;
+                lastBit_ = lastBit_ ^ newBit; // differential encoding
 
-              bitNum_ = (bitNum_+1)%(20*13*8);
+                bitNum_ = (bitNum_ + 1) % (20 * 13 * 8);
             }
 
-            int outputBit = (time_<192)?lastBit_:1-lastBit_; // manchester encoding
+            int outputBit = (time_ < 192) ? lastBit_ : 1 - lastBit_; // manchester encoding
 
-            lastValue_ = lastValue_*0.99 + (((float)outputBit)*2-1)*0.01;  // very simple IIR filter to hopefully reduce sidebands.
-            data[i] += lastValue_*sinLut_[time_%8]*0.05;
+            lastValue_ = lastValue_ * 0.99 + (((float)outputBit) * 2 - 1) * 0.01; // very simple IIR filter to hopefully reduce sidebands.
+            data[i] += lastValue_ * sinLut_[time_ % 8] * 0.05;
 
-            time_ = (time_+1)%384;
+            time_ = (time_ + 1) % 384;
         }
         next_->consume(data, num);
     }
@@ -504,8 +504,8 @@ public:
 
     StereoModulator(SampleSink* next):
         buffer_(), bufferOwner_(0), bufferLen_(0), state_(0), sinLut_(), next_(next) {
-        for (int i=0; i<16; i++) {
-            sinLut_[i] = sin((float)i*2.0*PI/8);
+        for (int i = 0; i < 16; i++) {
+            sinLut_[i] = sin((float)i * 2.0 * PI / 8);
         }
     }
 
@@ -514,30 +514,30 @@ public:
     }
 
     void consume(float* data, int num, int channel) {
-        if (channel==bufferOwner_ || bufferLen_==0) {
-            bufferOwner_=channel;
+        if (channel == bufferOwner_ || bufferLen_ == 0) {
+            bufferOwner_ = channel;
             // append to buffer
-            while(num && bufferLen_<1024) {
+            while (num && bufferLen_ < 1024) {
                 buffer_[bufferLen_++] = data[0];
                 data++;
                 num--;
             }
         } else {
-            int consumable = (bufferLen_<num)?bufferLen_:num;
-            float* left = (bufferOwner_==0)?buffer_:data;
-            float* right = (bufferOwner_==1)?buffer_:data;
-            for (int i=0; i<consumable; i++) {
-                state_ = (state_+1) %8;
+            int consumable = (bufferLen_ < num) ? bufferLen_ : num;
+            float* left = (bufferOwner_ == 0) ? buffer_ : data;
+            float* right = (bufferOwner_ == 1) ? buffer_ : data;
+            for (int i = 0; i < consumable; i++) {
+                state_ = (state_ + 1) % 8;
                 // equation straight from wikipedia...
-                buffer_[i] = ((left[i]+right[i])/2 + (left[i]-right[i])/2*sinLut_[state_*2])*0.9 + 0.1*sinLut_[state_];
+                buffer_[i] = ((left[i] + right[i]) / 2 + (left[i] - right[i]) / 2 * sinLut_[state_ * 2]) * 0.9 + 0.1 * sinLut_[state_];
             }
             next_->consume(buffer_, consumable);
 
             // move stuff along buffer_
-            for (int i=consumable; i<bufferLen_; i++) {
-              buffer_[i-consumable] = buffer_[i];
+            for (int i = consumable; i < bufferLen_; i++) {
+                buffer_[i - consumable] = buffer_[i];
             }
-            bufferLen_-=consumable;
+            bufferLen_ -= consumable;
 
             //reconsume any remaining data
             data += consumable;
@@ -551,30 +551,32 @@ private:
 };
 
 
-void playWav(char* filename, float samplerate, bool stereo)
-{
-    int fp= STDIN_FILENO;
-    if(filename[0]!='-') fp = open(filename, 'r');
+void playWav(char* filename, float samplerate, bool stereo) {
+    int fp = STDIN_FILENO;
+    if (filename[0] != '-') {
+        fp = open(filename, 'r');
+    }
 
     char data[1024];
 
     SampleSink* ss;
 
     if (stereo) {
-      StereoModulator* sm = new StereoModulator(new RDSEncoder(new Outputter(152000)));
-      ss = new StereoSplitter(
-        // left
-        new PreEmp(samplerate, new Resamp(samplerate, 152000, sm->getChannel(0))),
+        StereoModulator* sm = new StereoModulator(new RDSEncoder(new Outputter(152000)));
+        ss = new StereoSplitter(
+            // left
+            new PreEmp(samplerate, new Resamp(samplerate, 152000, sm->getChannel(0))),
 
-        // Right
-        new PreEmp(samplerate, new Resamp(samplerate, 152000, sm->getChannel(1)))
-      );
+            // Right
+            new PreEmp(samplerate, new Resamp(samplerate, 152000, sm->getChannel(1)))
+        );
     } else {
-      ss = new Mono(new PreEmp(samplerate, new Outputter(samplerate)));
+        ss = new Mono(new PreEmp(samplerate, new Outputter(samplerate)));
     }
 
-    for (int i=0; i<22; i++)
-       read(fp, &data, 2);  // read past header
+    for (int i = 0; i < 22; i++) {
+        read(fp, &data, 2);    // read past header
+    }
 
     int readBytes;
     while ((readBytes = read(fp, &data, 1024))) {
@@ -584,106 +586,106 @@ void playWav(char* filename, float samplerate, bool stereo)
     close(fp);
 }
 
-void unSetupDMA(){
+void unSetupDMA() {
     printf("exiting\n");
-    DMAregs* DMA0 = (DMAregs*)&(ACCESS(DMABASE));
-    DMA0->CS =1<<31;  // reset dma controller
+    DMAregs* DMA0 = (DMAregs*) & (ACCESS(DMABASE));
+    DMA0->CS = 1 << 31; // reset dma controller
 
 }
 
 void handSig(int) {
     exit(0);
 }
-void setupDMA( float centerFreq ){
 
-  atexit(unSetupDMA);
-  signal (SIGINT, handSig);
-  signal (SIGTERM, handSig);
-  signal (SIGHUP, handSig);
-  signal (SIGQUIT, handSig);
+void setupDMA( float centerFreq ) {
+    atexit(unSetupDMA);
+    signal (SIGINT, handSig);
+    signal (SIGTERM, handSig);
+    signal (SIGHUP, handSig);
+    signal (SIGQUIT, handSig);
 
-   // allocate a few pages of ram
-   getRealMemPage(&constPage.v, &constPage.p);
+    // allocate a few pages of ram
+    getRealMemPage(&constPage.v, &constPage.p);
 
-   int centerFreqDivider = (int)((500.0 / centerFreq) * (float)(1<<12) + 0.5);
+    int centerFreqDivider = (int)((500.0 / centerFreq) * (float)(1 << 12) + 0.5);
 
-   // make data page contents - it's essientially 1024 different commands for the
-   // DMA controller to send to the clock module at the correct time.
-   for (int i=0; i<1024; i++)
-     ((int*)(constPage.v))[i] = (0x5a << 24) + centerFreqDivider - 512 + i;
+    // make data page contents - it's essientially 1024 different commands for the
+    // DMA controller to send to the clock module at the correct time.
+    for (int i = 0; i < 1024; i++) {
+        ((int*)(constPage.v))[i] = (0x5a << 24) + centerFreqDivider - 512 + i;
+    }
 
 
-   int instrCnt = 0;
+    int instrCnt = 0;
 
-   while (instrCnt<BUFFERINSTRUCTIONS) {
-     getRealMemPage(&instrPage.v, &instrPage.p);
+    while (instrCnt < BUFFERINSTRUCTIONS) {
+        getRealMemPage(&instrPage.v, &instrPage.p);
 
-     // make copy instructions
-     CB* instr0= (CB*)instrPage.v;
+        // make copy instructions
+        CB* instr0 = (CB*)instrPage.v;
 
-     for (int i=0; i<(int)(4096/sizeof(CB)); i++) {
-       instrs[instrCnt].v = (void*)((int)instrPage.v + sizeof(CB)*i);
-       instrs[instrCnt].p = (void*)((int)instrPage.p + sizeof(CB)*i);
-       instr0->SOURCE_AD = (unsigned int)constPage.p+2048;
-       instr0->DEST_AD = PWMBASE+0x18 /* FIF1 */;
-       instr0->TXFR_LEN = 4;
-       instr0->STRIDE = 0;
-       //instr0->NEXTCONBK = (int)instrPage.p + sizeof(CB)*(i+1);
-       instr0->TI = (1/* DREQ  */<<6) | (5 /* PWM */<<16) |  (1<<26/* no wide*/) ;
-       instr0->RES1 = 0;
-       instr0->RES2 = 0;
+        for (int i = 0; i < (int)(4096 / sizeof(CB)); i++) {
+            instrs[instrCnt].v = (void*)((int)instrPage.v + sizeof(CB) * i);
+            instrs[instrCnt].p = (void*)((int)instrPage.p + sizeof(CB) * i);
+            instr0->SOURCE_AD = (unsigned int)constPage.p + 2048;
+            instr0->DEST_AD = PWMBASE + 0x18 /* FIF1 */;
+            instr0->TXFR_LEN = 4;
+            instr0->STRIDE = 0;
+            //instr0->NEXTCONBK = (int)instrPage.p + sizeof(CB)*(i+1);
+            instr0->TI = (1/* DREQ  */ << 6) | (5 /* PWM */ << 16) |  (1 << 26/* no wide*/) ;
+            instr0->RES1 = 0;
+            instr0->RES2 = 0;
 
-       if (!(i%2)) {
-         instr0->DEST_AD = CM_GP0DIV;
-         instr0->STRIDE = 4;
-         instr0->TI = (1<<26/* no wide*/) ;
-       }
+            if (!(i % 2)) {
+                instr0->DEST_AD = CM_GP0DIV;
+                instr0->STRIDE = 4;
+                instr0->TI = (1 << 26/* no wide*/) ;
+            }
 
-       if (instrCnt!=0) ((CB*)(instrs[instrCnt-1].v))->NEXTCONBK = (int)instrs[instrCnt].p;
-       instr0++;
-       instrCnt++;
-     }
-   }
-   ((CB*)(instrs[BUFFERINSTRUCTIONS-1].v))->NEXTCONBK = (int)instrs[0].p;
+            if (instrCnt != 0) {
+                ((CB*)(instrs[instrCnt - 1].v))->NEXTCONBK = (int)instrs[instrCnt].p;
+            }
+            instr0++;
+            instrCnt++;
+        }
+    }
+    ((CB*)(instrs[BUFFERINSTRUCTIONS - 1].v))->NEXTCONBK = (int)instrs[0].p;
 
-   // set up a clock for the PWM
-   ACCESS(CLKBASE + 40*4 /*PWMCLK_CNTL*/) = 0x5A000026;
-   usleep(1000);
-   ACCESS(CLKBASE + 41*4 /*PWMCLK_DIV*/)  = 0x5A002800;
-   ACCESS(CLKBASE + 40*4 /*PWMCLK_CNTL*/) = 0x5A000016;
-   usleep(1000);
+    // set up a clock for the PWM
+    ACCESS(CLKBASE + 40 * 4 /*PWMCLK_CNTL*/) = 0x5A000026;
+    usleep(1000);
+    ACCESS(CLKBASE + 41 * 4 /*PWMCLK_DIV*/)  = 0x5A002800;
+    ACCESS(CLKBASE + 40 * 4 /*PWMCLK_CNTL*/) = 0x5A000016;
+    usleep(1000);
 
-   // set up pwm
-   ACCESS(PWMBASE + 0x0 /* CTRL*/) = 0;
-   usleep(1000);
-   ACCESS(PWMBASE + 0x4 /* status*/) = -1;  // clear errors
-   usleep(1000);
-   ACCESS(PWMBASE + 0x0 /* CTRL*/) = -1; //(1<<13 /* Use fifo */) | (1<<10 /* repeat */) | (1<<9 /* serializer */) | (1<<8 /* enable ch */) ;
-   usleep(1000);
-   ACCESS(PWMBASE + 0x8 /* DMAC*/) = (1<<31 /* DMA enable */) | 0x0707;
+    // set up pwm
+    ACCESS(PWMBASE + 0x0 /* CTRL*/) = 0;
+    usleep(1000);
+    ACCESS(PWMBASE + 0x4 /* status*/) = -1;  // clear errors
+    usleep(1000);
+    ACCESS(PWMBASE + 0x0 /* CTRL*/) = -1; //(1<<13 /* Use fifo */) | (1<<10 /* repeat */) | (1<<9 /* serializer */) | (1<<8 /* enable ch */) ;
+    usleep(1000);
+    ACCESS(PWMBASE + 0x8 /* DMAC*/) = (1 << 31 /* DMA enable */) | 0x0707;
 
-   //activate dma
-   DMAregs* DMA0 = (DMAregs*)&(ACCESS(DMABASE));
-   DMA0->CS =1<<31;  // reset
-   DMA0->CONBLK_AD=0;
-   DMA0->TI=0;
-   DMA0->CONBLK_AD = (unsigned int)(instrPage.p);
-   DMA0->CS =(1<<0)|(255 <<16);  // enable bit = 0, clear end flag = 1, prio=19-16
+    //activate dma
+    DMAregs* DMA0 = (DMAregs*) & (ACCESS(DMABASE));
+    DMA0->CS = 1 << 31; // reset
+    DMA0->CONBLK_AD = 0;
+    DMA0->TI = 0;
+    DMA0->CONBLK_AD = (unsigned int)(instrPage.p);
+    DMA0->CS = (1 << 0) | (255 << 16); // enable bit = 0, clear end flag = 1, prio=19-16
 }
 
 
-
-int main(int argc, char **argv)
-{
-
-    if (argc>1) {
-      setup_fm();
-      setupDMA(argc>2?atof(argv[2]):103.3);
-      playWav(argv[1], argc>3?atof(argv[3]):22050, argc>4);
-    } else
-      fprintf(stderr, "Usage:   program wavfile.wav [freq] [sample rate] [stereo]\n\nWhere wavfile is 16 bit 22.5kHz Stereo.  Set wavfile to '-' to use stdin.\nfreq is in Mhz (default 103.3)\nsample rate of wav file in Hz\n\nPlay an empty file to transmit silence\n");
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        setup_fm();
+        setupDMA(argc > 2 ? atof(argv[2]) : 103.3);
+        playWav(argv[1], argc > 3 ? atof(argv[3]) : 22050, argc > 4);
+    } else {
+        fprintf(stderr, "Usage:   program wavfile.wav [freq] [sample rate] [stereo]\n\nWhere wavfile is 16 bit 22.5kHz Stereo.  Set wavfile to '-' to use stdin.\nfreq is in Mhz (default 103.3)\nsample rate of wav file in Hz\n\nPlay an empty file to transmit silence\n");
+    }
 
     return 0;
 
-} // main
-
+}
