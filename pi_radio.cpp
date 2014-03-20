@@ -2,19 +2,15 @@
 // RC control stuff added by Brandon Skari.
 
 
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <dirent.h>
-#include <math.h>
+#include <cassert>
 #include <fcntl.h>
-#include <assert.h>
 #include <malloc.h>
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/time.h>
+#include <math.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #define PAGE_SIZE (4*1024)
@@ -23,13 +19,13 @@
 #define PI 3.14159265
 
 int  mem_fd;
-char *gpio_mem, *gpio_map;
-char *spi0_mem, *spi0_map;
+char* gpio_mem, *gpio_map;
+char* spi0_mem, *spi0_map;
 
 
 // I/O access
-volatile unsigned *gpio;
-volatile unsigned *allof7e;
+volatile unsigned* gpio;
+volatile unsigned* allof7e;
 
 // GPIO setup macros. Always use INP_GPIO(x) before using OUT_GPIO(x) or SET_GPIO_ALT(x,y)
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
@@ -69,7 +65,6 @@ union GPCTL_int {
 };
 
 
-
 void getRealMemPage(void** vAddr, void** pAddr) {
     void* a = valloc(4096);
 
@@ -81,7 +76,7 @@ void getRealMemPage(void** vAddr, void** pAddr) {
 
     unsigned long long frameinfo;
 
-    int fp = open("/proc/self/pagemap", 'r');
+    const int fp = open("/proc/self/pagemap", 'r');
     lseek(fp, ((int)a) / 4096 * 8, SEEK_SET);
     read(fp, &frameinfo, sizeof(frameinfo));
 
@@ -102,14 +97,14 @@ void setup_fm() {
         exit (-1);
     }
 
-    allof7e = (unsigned *)mmap(
-        NULL,
-        0x01000000,  //len
-        PROT_READ | PROT_WRITE,
-        MAP_SHARED,
-        mem_fd,
-        0x20000000  //base
-    );
+    allof7e = (unsigned*)mmap(
+                  NULL,
+                  0x01000000,  //len
+                  PROT_READ | PROT_WRITE,
+                  MAP_SHARED,
+                  mem_fd,
+                  0x20000000  //base
+              );
 
     if ((int)allof7e == -1) {
         exit(-1);
@@ -181,7 +176,7 @@ public:
 class Outputter : public SampleSink {
 public:
     int bufPtr_;
-    float clocksPerSample_;
+    const float clocksPerSample_;
     const int sleeptime_;
     float fracerror_;
     float timeErr_;
@@ -191,8 +186,7 @@ public:
         , clocksPerSample_(22500.0 / rate * 1373.5)  // for timing, determined by experiment
         , sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / rate / 2) // sleep time is half of the time to empty the buffer
         , fracerror_(0)
-        , timeErr_(0)
-    {
+        , timeErr_(0) {
     }
     void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
@@ -211,9 +205,9 @@ public:
 
             value += fracerror_;  // error that couldn't be encoded from last time.
 
-            int intval = (int)(round(value));  // integer component
-            float frac = (value - (float)intval + 1) / 2;
-            unsigned int fracval = round(frac * clocksPerSample_); // the fractional component
+            const int intval = (int)(round(value));  // integer component
+            const float frac = (value - (float)intval + 1) / 2;
+            const unsigned int fracval = round(frac * clocksPerSample_); // the fractional component
 
             // we also record time error so that if one sample is output
             // for slightly too long, the next sample will be shorter.
@@ -259,17 +253,16 @@ public:
 
 class PreEmp : public SampleSink {
 public:
-    float fmconstant_;
+    const float fmconstant_;
     float dataold_;
-    SampleSink* next_;
+    SampleSink* const next_;
 
     // this isn't the right filter...  But it's close...
     // Something todo with a bilinear transform not being right...
-    PreEmp(float rate, SampleSink* next)
+    PreEmp(const float rate, SampleSink* next)
         : fmconstant_(rate * 75.0e-6) // for pre-emphisis filter.  75us time constan
         , dataold_(0)
-        , next_(next)
-    {
+        , next_(next) {
     };
 
     ~PreEmp() {
@@ -279,7 +272,7 @@ public:
 
     void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
-            float value = data[i];
+            const float value = data[i];
 
             float sample = value + (dataold_ - value) / (1 - fmconstant_); // fir of 1 + s tau
 
@@ -289,8 +282,8 @@ public:
         }
     }
 private:
-    PreEmp (const PreEmp &);
-    PreEmp & operator=(const PreEmp &);
+    PreEmp(const PreEmp&);
+    PreEmp& operator=(const PreEmp&);
 };
 
 
@@ -305,7 +298,7 @@ public:
     float outTimeLeft_;
     float outBuffer_[BUFSIZE];
     int outBufPtr_;
-    SampleSink* next_;
+    SampleSink* const next_;
 
     Resamp(float rateIn, float rateOut, SampleSink* next)
         : dataOld_()
@@ -314,8 +307,7 @@ public:
         , outTimeLeft_(1.0)
         , outBuffer_()
         , outBufPtr_(0)
-        , next_(next)
-    {
+        , next_(next) {
         for (int i = 0; i < QUALITY; i++) { // sample
             for (int j = 0; j < SQUALITY; j++) { // starttime
                 const float x = PI * ((float)j / SQUALITY + (QUALITY - 1 - i) - (QUALITY - 1) / 2.0);
@@ -347,7 +339,7 @@ public:
             // go output this stuff!
             while (outTimeLeft_ < 1.0) {
                 float outSample = 0;
-                int lutNum = (int)(outTimeLeft_ * SQUALITY);
+                const int lutNum = (int)(outTimeLeft_ * SQUALITY);
                 for (int j = 0; j < QUALITY; j++) {
                     outSample += dataOld_[j] * sincLUT_[lutNum][j];
                 }
@@ -363,8 +355,8 @@ public:
         }
     }
 private:
-    Resamp(const Resamp &);
-    Resamp & operator=(const Resamp &);
+    Resamp(const Resamp&);
+    Resamp& operator=(const Resamp&);
 };
 
 class NullSink : public SampleSink {
@@ -377,11 +369,12 @@ public:
 // decodes a mono wav file
 class Mono : public SampleSink {
 public:
-    SampleSink* next_;
+    SampleSink* const next_;
 
     Mono(SampleSink* next): next_(next) { }
 
     void consume(void* const data, const int num) {    // expects num%2 == 0
+        assert(num % 2 == 0);
         for (int i = 0; i < num / 2; i++) {
             float l = (float)(((short*)data)[i]) / 32768.0;
             next_->consume(&l, 1);
@@ -403,8 +396,7 @@ public:
 
     StereoSplitter(SampleSink* nextLeft, SampleSink* nextRight)
         : nextLeft_(nextLeft)
-        , nextRight_(nextRight)
-    {
+        , nextRight_(nextRight) {
     }
 
     ~StereoSplitter() {
@@ -413,6 +405,7 @@ public:
     }
 
     void consume(void* const data, const int num) {    // expects num%4 == 0
+        assert(num % 4 == 0);
         for (int i = 0; i < num / 2; i += 2) {
             float l = (float)(((short*)data)[i]) / 32768.0;
             nextLeft_->consume( &l, 1);
@@ -454,7 +447,7 @@ const unsigned char RDSDATA[] = {
 class RDSEncoder : public SampleSink {
 public:
     float sinLut_[8];
-    SampleSink* next_;
+    SampleSink* const next_;
     int bitNum_;
     int lastBit_;
     int time_;
@@ -465,8 +458,7 @@ public:
         , bitNum_(0)
         , lastBit_(0)
         , time_(0)
-        , lastValue_(0)
-    {
+        , lastValue_(0) {
         for (int i = 0; i < 8; i++) {
             sinLut_[i] = sin((float)i * 2.0 * PI * 3 / 8);
         }
@@ -486,7 +478,7 @@ public:
                 bitNum_ = (bitNum_ + 1) % (20 * 13 * 8);
             }
 
-            int outputBit = (time_ < 192) ? lastBit_ : 1 - lastBit_; // manchester encoding
+            const int outputBit = (time_ < 192) ? lastBit_ : 1 - lastBit_; // manchester encoding
 
             lastValue_ = lastValue_ * 0.99 + (((float)outputBit) * 2 - 1) * 0.01; // very simple IIR filter to hopefully reduce sidebands.
             data[i] += lastValue_ * sinLut_[time_ % 8] * 0.05;
@@ -507,13 +499,12 @@ public:
     // Helper to make two input interfaces for the stereomodulator.   Feels like I'm reimplementing a closure here... :-(
     class ModulatorInput : public SampleSink {
     public:
-        StereoModulator* mod_;
-        int channel_;
+        StereoModulator* const mod_;
+        const int channel_;
 
         ModulatorInput(StereoModulator* mod, int channel)
             : mod_(mod)
-            , channel_(channel)
-        {
+            , channel_(channel) {
         }
 
         ~ModulatorInput() {
@@ -542,8 +533,7 @@ public:
         , bufferLen_(0)
         , state_(0)
         , sinLut_()
-        , next_(next)
-    {
+        , next_(next) {
         for (int i = 0; i < 16; i++) {
             sinLut_[i] = sin((float)i * 2.0 * PI / 8);
         }
@@ -567,9 +557,9 @@ public:
                 num--;
             }
         } else {
-            int consumable = (bufferLen_ < num) ? bufferLen_ : num;
-            float* left = (bufferOwner_ == 0) ? buffer_ : data;
-            float* right = (bufferOwner_ == 1) ? buffer_ : data;
+            const int consumable = (bufferLen_ < num) ? bufferLen_ : num;
+            float* const left = (bufferOwner_ == 0) ? buffer_ : data;
+            float* const right = (bufferOwner_ == 1) ? buffer_ : data;
             for (int i = 0; i < consumable; i++) {
                 state_ = (state_ + 1) % 8;
                 // equation straight from wikipedia...
@@ -596,10 +586,9 @@ private:
 
 
 void playWav(char* filename, float samplerate, bool stereo) {
-    int fp = STDIN_FILENO;
-    if (filename[0] != '-') {
-        fp = open(filename, 'r');
-    }
+    const int fp = (filename[0] == '-' && filename[1] == '\0')
+        ? STDIN_FILENO
+        : open(filename, 'r');
 
     char data[1024];
 
@@ -629,16 +618,18 @@ void playWav(char* filename, float samplerate, bool stereo) {
     close(fp);
 }
 
+
 void unSetupDMA() {
     printf("exiting\n");
     DMAregs* DMA0 = (DMAregs*) & (ACCESS(DMABASE));
     DMA0->CS = 1 << 31; // reset dma controller
-
 }
+
 
 void handSig(int) {
     exit(0);
 }
+
 
 void setupDMA(float centerFreq) {
     atexit(unSetupDMA);
@@ -657,7 +648,6 @@ void setupDMA(float centerFreq) {
     for (int i = 0; i < 1024; i++) {
         ((int*)(constPage.v))[i] = (0x5a << 24) + centerFreqDivider - 512 + i;
     }
-
 
     int instrCnt = 0;
 
@@ -720,7 +710,7 @@ void setupDMA(float centerFreq) {
 }
 
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (argc > 1) {
         setup_fm();
         setupDMA(argc > 2 ? atof(argv[2]) : 103.3);
