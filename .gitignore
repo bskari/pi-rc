@@ -14,3 +14,7 @@
 *.lai
 *.la
 *.a
+
+# Generated files
+pi_radio
+.sconsign.dblite
