@@ -103,13 +103,13 @@ void setup_fm() {
     }
 
     allof7e = (unsigned *)mmap(
-                  NULL,
-                  0x01000000,  //len
-                  PROT_READ | PROT_WRITE,
-                  MAP_SHARED,
-                  mem_fd,
-                  0x20000000  //base
-              );
+        NULL,
+        0x01000000,  //len
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        mem_fd,
+        0x20000000  //base
+    );
 
     if ((int)allof7e == -1) {
         exit(-1);
@@ -145,7 +145,6 @@ struct CB {
     volatile unsigned int NEXTCONBK;
     volatile unsigned int RES1;
     volatile unsigned int RES2;
-
 };
 
 struct DMAregs {
@@ -174,8 +173,8 @@ struct PageInfo instrs[BUFFERINSTRUCTIONS];
 
 class SampleSink {
 public:
-    virtual void consume(float*, int) {}; // floating point samples
-    virtual void consume(void*, int) {}; // raw data, len in bytes.
+    virtual void consume(float* const, const int) {}; // floating point samples
+    virtual void consume(void* const, const int) {}; // raw data, len in bytes.
     virtual ~SampleSink() {};
 };
 
@@ -187,14 +186,15 @@ public:
     float fracerror_;
     float timeErr_;
 
-    Outputter(float rate):
-        bufPtr_(0),
-        clocksPerSample_(22500.0 / rate * 1373.5),  // for timing, determined by experiment
-        sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / rate / 2), // sleep time is half of the time to empty the buffer
-        fracerror_(0),
-        timeErr_(0) {
+    Outputter(float rate)
+        : bufPtr_(0)
+        , clocksPerSample_(22500.0 / rate * 1373.5)  // for timing, determined by experiment
+        , sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / rate / 2) // sleep time is half of the time to empty the buffer
+        , fracerror_(0)
+        , timeErr_(0)
+    {
     }
-    void consume(float* data, int num) {
+    void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
             float value = data[i] * 8; // modulation index (AKA volume!)
 
@@ -265,13 +265,19 @@ public:
 
     // this isn't the right filter...  But it's close...
     // Something todo with a bilinear transform not being right...
-    PreEmp(float rate, SampleSink* next):
-        fmconstant_(rate * 75.0e-6), // for pre-emphisis filter.  75us time constant
-        dataold_(0),
-        next_(next) { };
+    PreEmp(float rate, SampleSink* next)
+        : fmconstant_(rate * 75.0e-6) // for pre-emphisis filter.  75us time constan
+        , dataold_(0)
+        , next_(next)
+    {
+    };
+
+    ~PreEmp() {
+        delete next_;
+    }
 
 
-    void consume(float* data, int num) {
+    void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
             float value = data[i];
 
@@ -301,18 +307,18 @@ public:
     int outBufPtr_;
     SampleSink* next_;
 
-    Resamp(float rateIn, float rateOut, SampleSink* next):
-        dataOld_(),
-        sincLUT_(),
-        ratio_((float)rateIn / (float)rateOut),
-        outTimeLeft_(1.0),
-        outBuffer_(),
-        outBufPtr_(0),
-        next_(next) {
-
+    Resamp(float rateIn, float rateOut, SampleSink* next)
+        : dataOld_()
+        , sincLUT_()
+        , ratio_((float)rateIn / (float)rateOut)
+        , outTimeLeft_(1.0)
+        , outBuffer_()
+        , outBufPtr_(0)
+        , next_(next)
+    {
         for (int i = 0; i < QUALITY; i++) { // sample
             for (int j = 0; j < SQUALITY; j++) { // starttime
-                float x = PI * ((float)j / SQUALITY + (QUALITY - 1 - i) - (QUALITY - 1) / 2.0);
+                const float x = PI * ((float)j / SQUALITY + (QUALITY - 1 - i) - (QUALITY - 1) / 2.0);
                 if (x == 0) {
                     sincLUT_[j][i] = 1.0;    // sin(0)/(0) == 1, says my limits therory
                 } else {
@@ -320,11 +326,14 @@ public:
                 }
             }
         }
-
     };
 
+    ~Resamp() {
+        delete next_;
+    }
 
-    void consume(float* data, int num) {
+
+    void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
             // shift old data along
             for (int j = 0; j < QUALITY - 1; j++) {
@@ -354,46 +363,56 @@ public:
         }
     }
 private:
-    Resamp (const Resamp &);
+    Resamp(const Resamp &);
     Resamp & operator=(const Resamp &);
 };
 
-class NullSink: public SampleSink {
+class NullSink : public SampleSink {
 public:
-
     NullSink() { }
 
-    void consume(float*, int) {}   // throws away data
+    void consume(float* const, const int) {}   // throws away data
 };
 
 // decodes a mono wav file
-class Mono: public SampleSink {
+class Mono : public SampleSink {
 public:
     SampleSink* next_;
 
     Mono(SampleSink* next): next_(next) { }
 
-    void consume(void* data, int num) {    // expects num%2 == 0
+    void consume(void* const data, const int num) {    // expects num%2 == 0
         for (int i = 0; i < num / 2; i++) {
             float l = (float)(((short*)data)[i]) / 32768.0;
-            next_->consume( &l, 1);
+            next_->consume(&l, 1);
         }
+    }
+
+    ~Mono() {
+        delete next_;
     }
 private:
     Mono(const Mono&);
     Mono& operator=(const Mono&);
 };
 
-class StereoSplitter: public SampleSink {
+class StereoSplitter : public SampleSink {
 public:
     SampleSink* nextLeft_;
     SampleSink* nextRight_;
 
-    StereoSplitter(SampleSink* nextLeft, SampleSink* nextRight):
-        nextLeft_(nextLeft), nextRight_(nextRight) { }
+    StereoSplitter(SampleSink* nextLeft, SampleSink* nextRight)
+        : nextLeft_(nextLeft)
+        , nextRight_(nextRight)
+    {
+    }
 
+    ~StereoSplitter() {
+        delete nextLeft_;
+        delete nextRight_;
+    }
 
-    void consume(void* data, int num) {    // expects num%4 == 0
+    void consume(void* const data, const int num) {    // expects num%4 == 0
         for (int i = 0; i < num / 2; i += 2) {
             float l = (float)(((short*)data)[i]) / 32768.0;
             nextLeft_->consume( &l, 1);
@@ -432,7 +451,7 @@ const unsigned char RDSDATA[] = {
     0x50, 0xFF, 0xA9, 0x09, 0x03, 0xFD, 0x22, 0x02, 0x00, 0x00, 0x80, 0x80, 0xDC
 };
 
-class RDSEncoder: public SampleSink {
+class RDSEncoder : public SampleSink {
 public:
     float sinLut_[8];
     SampleSink* next_;
@@ -441,14 +460,23 @@ public:
     int time_;
     float lastValue_;
 
-    RDSEncoder(SampleSink* next):
-        next_(next), bitNum_(0), lastBit_(0), time_(0), lastValue_(0) {
+    RDSEncoder(SampleSink* next)
+        : next_(next)
+        , bitNum_(0)
+        , lastBit_(0)
+        , time_(0)
+        , lastValue_(0)
+    {
         for (int i = 0; i < 8; i++) {
             sinLut_[i] = sin((float)i * 2.0 * PI * 3 / 8);
         }
     }
 
-    void consume(float* data, int num) {
+    ~RDSEncoder() {
+        delete next_;
+    }
+
+    void consume(float* const data, const int num) {
         for (int i = 0; i < num; i++) {
             if (!time_) {
                 // time_ for a new bit
@@ -473,20 +501,26 @@ private:
 };
 
 // Takes 2 input signals at 152kHz and stereo modulates it.
-class StereoModulator: public SampleSink {
+class StereoModulator : public SampleSink {
 public:
 
     // Helper to make two input interfaces for the stereomodulator.   Feels like I'm reimplementing a closure here... :-(
-    class ModulatorInput: public SampleSink {
+    class ModulatorInput : public SampleSink {
     public:
         StereoModulator* mod_;
         int channel_;
 
-        ModulatorInput(StereoModulator* mod, int channel):
-            mod_(mod),
-            channel_(channel) { }
+        ModulatorInput(StereoModulator* mod, int channel)
+            : mod_(mod)
+            , channel_(channel)
+        {
+        }
 
-        void consume(float* data, int num) {
+        ~ModulatorInput() {
+            delete mod_;
+        }
+
+        void consume(float* const data, const int num) {
             mod_->consume(data, num, channel_);
         }
     private:
@@ -502,18 +536,28 @@ public:
 
     SampleSink* next_;
 
-    StereoModulator(SampleSink* next):
-        buffer_(), bufferOwner_(0), bufferLen_(0), state_(0), sinLut_(), next_(next) {
+    StereoModulator(SampleSink* next)
+        : buffer_()
+        , bufferOwner_(0)
+        , bufferLen_(0)
+        , state_(0)
+        , sinLut_()
+        , next_(next)
+    {
         for (int i = 0; i < 16; i++) {
             sinLut_[i] = sin((float)i * 2.0 * PI / 8);
         }
+    }
+
+    ~StereoModulator() {
+        delete next_;
     }
 
     SampleSink* getChannel(int channel) {
         return new ModulatorInput(this, channel);  // never freed, cos I'm a rebel...
     }
 
-    void consume(float* data, int num, int channel) {
+    void consume(float* data, int num, const int channel) {
         if (channel == bufferOwner_ || bufferLen_ == 0) {
             bufferOwner_ = channel;
             // append to buffer
@@ -580,7 +624,6 @@ void playWav(char* filename, float samplerate, bool stereo) {
 
     int readBytes;
     while ((readBytes = read(fp, &data, 1024))) {
-
         ss->consume(data, readBytes);
     }
     close(fp);
@@ -597,17 +640,17 @@ void handSig(int) {
     exit(0);
 }
 
-void setupDMA( float centerFreq ) {
+void setupDMA(float centerFreq) {
     atexit(unSetupDMA);
-    signal (SIGINT, handSig);
-    signal (SIGTERM, handSig);
-    signal (SIGHUP, handSig);
-    signal (SIGQUIT, handSig);
+    signal(SIGINT, handSig);
+    signal(SIGTERM, handSig);
+    signal(SIGHUP, handSig);
+    signal(SIGQUIT, handSig);
 
     // allocate a few pages of ram
     getRealMemPage(&constPage.v, &constPage.p);
 
-    int centerFreqDivider = (int)((500.0 / centerFreq) * (float)(1 << 12) + 0.5);
+    const int centerFreqDivider = (int)((500.0 / centerFreq) * (float)(1 << 12) + 0.5);
 
     // make data page contents - it's essientially 1024 different commands for the
     // DMA controller to send to the clock module at the correct time.
@@ -687,5 +730,4 @@ int main(int argc, char **argv) {
     }
 
     return 0;
-
 }
