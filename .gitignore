@@ -16,5 +16,5 @@
 *.a
 
 # Generated files
-pi_radio
+pi_fm
 .sconsign.dblite

@@ -5,11 +5,12 @@ environment = Environment()
 
 environment.Append(CXXFLAGS=' '.join((debug_flags, warning_flags)))
 
-pi_radio_target = environment.Program(
-    target='pi_radio',
+pi_fm_target = environment.Program(
+    target='pi_fm',
     source=(
+        'pi_fm.cpp',
         'pi_radio.cpp',
     )
 )
 
-Default(pi_radio_target)
+Default(pi_fm_target)
