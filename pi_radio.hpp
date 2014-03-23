@@ -5,39 +5,45 @@ void setupFm();
 
 class SampleSink {
 public:
-    virtual void consume(float* const, const int) {}; // floating point samples
-    virtual void consume(void* const, const int) {}; // raw data, len in bytes.
+    virtual void consume(float*, int) {}; // floating point samples
+    virtual void consume(void*, int) {}; // raw data, len in bytes.
     virtual ~SampleSink() {};
+    virtual int getSampleRate() const = 0;
 };
 
 
 class Outputter : public SampleSink {
 public:
+    Outputter(float sampleRate);
+    void consume(float* data, int num);
+    int getSampleRate() const;
+
+private:
     int bufPtr_;
     const float clocksPerSample_;
     const int sleeptime_;
     float fracerror_;
     float timeErr_;
-
-    Outputter(float rate);
-    void consume(float* const data, const int num);
+    const float sampleRate_;
 };
 
 
 class PreEmp : public SampleSink {
 public:
-    const float fmconstant_;
-    float dataold_;
-    SampleSink* const next_;
 
     // this isn't the right filter...  But it's close...
     // Something todo with a bilinear transform not being right...
     PreEmp(const float rate, SampleSink* next);
-
     ~PreEmp();
 
-    void consume(float* const data, const int num);
+    void consume(float* data, int num);
+    int getSampleRate() const;
+
 private:
+    const float fmconstant_;
+    float dataold_;
+    SampleSink* const next_;
+
     PreEmp(const PreEmp&);
     PreEmp& operator=(const PreEmp&);
 };
@@ -45,6 +51,13 @@ private:
 
 class Resamp : public SampleSink {
 public:
+    void consume(float* data, int num);
+    int getSampleRate() const;
+
+    Resamp(float rateIn, float rateOut, SampleSink* next);
+    ~Resamp();
+
+private:
     static const int QUALITY = 5;    // comp. complexity goes up linearly with this.
     static const int SQUALITY = 10;  // start time quality (defines max phase error of filter vs ram used & cache thrashing)
     static const int BUFSIZE = 1000;
@@ -56,10 +69,6 @@ public:
     int outBufPtr_;
     SampleSink* const next_;
 
-    Resamp(float rateIn, float rateOut, SampleSink* next);
-    ~Resamp();
-    void consume(float* const data, const int num);
-private:
     Resamp(const Resamp&);
     Resamp& operator=(const Resamp&);
 };
@@ -68,12 +77,15 @@ private:
 // decodes a mono wav file
 class Mono : public SampleSink {
 public:
-    SampleSink* const next_;
     Mono(SampleSink* next);
-
-    void consume(void* const data, const int num);  // expects num%2 == 0
     ~Mono();
+
+    void consume(void* data, int num);  // expects num%2 == 0
+    int getSampleRate() const;
+
 private:
+    SampleSink* const next_;
+
     Mono(const Mono&);
     Mono& operator=(const Mono&);
 };
@@ -88,7 +100,8 @@ public:
 
     ~StereoSplitter();
 
-    void consume(void* const data, const int num);  // expects num%4 == 0
+    void consume(void* data, int num);  // expects num%4 == 0
+    int getSampleRate() const;
 private:
     StereoSplitter(const StereoSplitter&);
     StereoSplitter& operator=(const StereoSplitter&);
@@ -97,6 +110,13 @@ private:
 
 class RdsEncoder : public SampleSink {
 public:
+    RdsEncoder(SampleSink* next);
+    ~RdsEncoder();
+
+    void consume(float* data, int num);
+    int getSampleRate() const;
+
+private:
     float sinLut_[8];
     SampleSink* const next_;
     int bitNum_;
@@ -104,11 +124,6 @@ public:
     int time_;
     float lastValue_;
 
-    RdsEncoder(SampleSink* next);
-    ~RdsEncoder();
-
-    void consume(float* const data, const int num);
-private:
     RdsEncoder(const RdsEncoder&);
     RdsEncoder& operator=(const RdsEncoder&);
 };
@@ -120,30 +135,33 @@ public:
     // Helper to make two input interfaces for the stereomodulator.   Feels like I'm reimplementing a closure here... :-(
     class ModulatorInput : public SampleSink {
     public:
-        StereoModulator* const mod_;
-        const int channel_;
         ModulatorInput(StereoModulator* mod, int channel);
         ~ModulatorInput();
-        void consume(float* const data, const int num);
+        void consume(float* data, int num);
+        int getSampleRate() const;
+
     private:
+        StereoModulator* const mod_;
+        const int channel_;
+
         ModulatorInput(const ModulatorInput&);
         ModulatorInput& operator=(const ModulatorInput&);
     };
-
-    float buffer_[1024];
-    int bufferOwner_;
-    int bufferLen_;
-    int state_; // 8 state state machine.
-    float sinLut_[16];
-
-    SampleSink* next_;
 
     StereoModulator(SampleSink* next);
     ~StereoModulator();
     SampleSink* getChannel(int channel);
 
-    void consume(float* data, int num, const int channel);
+    void consume(float* data, int num, int channel);
+    int getSampleRate() const;
 private:
+    float buffer_[1024];
+    int bufferOwner_;
+    int bufferLen_;
+    int state_; // 8 state state machine.
+    float sinLut_[16];
+    SampleSink* next_;
+
     StereoModulator(const StereoModulator&);
     StereoModulator& operator=(const StereoModulator&);
 };

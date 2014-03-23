@@ -169,12 +169,13 @@ struct PageInfo instrPage;
 struct PageInfo instrs[BUFFERINSTRUCTIONS];
 
 
-Outputter::Outputter(float rate)
+Outputter::Outputter(const float sampleRate)
     : bufPtr_(0)
-    , clocksPerSample_(22500.0 / rate * 1373.5)  // for timing, determined by experiment
-    , sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / rate / 2) // sleep time is half of the time to empty the buffer
+    , clocksPerSample_(22500.0 / sampleRate * 1373.5)  // for timing, determined by experiment
+    , sleeptime_((float)1e6 * BUFFERINSTRUCTIONS / 4 / sampleRate / 2) // sleep time is half of the time to empty the buffer
     , fracerror_(0)
-    , timeErr_(0) {
+    , timeErr_(0)
+    , sampleRate_(sampleRate) {
 }
 
 
@@ -241,6 +242,11 @@ void Outputter::consume(float* const data, const int num) {
 }
 
 
+int Outputter::getSampleRate() const {
+    return sampleRate_;
+}
+
+
 // this isn't the right filter...  But it's close...
 // Something todo with a bilinear transform not being right...
 PreEmp::PreEmp(const float rate, SampleSink* next)
@@ -265,6 +271,11 @@ void PreEmp::consume(float* const data, const int num) {
 
         dataold_ = value;
     }
+}
+
+
+int PreEmp::getSampleRate() const {
+    assert(false && "Unimplemented");
 }
 
 
@@ -325,6 +336,12 @@ void Resamp::consume(float* const data, const int num) {
 }
 
 
+int Resamp::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
+}
+
+
 Mono::Mono(SampleSink* const next)
     : next_(next) {
 }
@@ -342,6 +359,12 @@ void Mono::consume(void* const data, const int num) {    // expects num%2 == 0
         float l = (float)(((short*)data)[i]) / 32768.0;
         next_->consume(&l, 1);
     }
+}
+
+
+int Mono::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
 }
 
 
@@ -366,6 +389,12 @@ void StereoSplitter::consume(void* const data, const int num) {    // expects nu
         float r = (float)(((short*)data)[i + 1]) / 32768.0;
         nextRight_->consume( &r, 1);
     }
+}
+
+
+int StereoSplitter::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
 }
 
 
@@ -429,6 +458,12 @@ void RdsEncoder::consume(float* const data, const int num) {
 }
 
 
+int RdsEncoder::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
+}
+
+
 StereoModulator::ModulatorInput::ModulatorInput(StereoModulator* const mod, const int channel)
     : mod_(mod)
     , channel_(channel) {
@@ -440,6 +475,12 @@ StereoModulator::ModulatorInput::~ModulatorInput() {
 
 void StereoModulator::ModulatorInput::consume(float* const data, const int num) {
     mod_->consume(data, num, channel_);
+}
+
+
+int StereoModulator::ModulatorInput::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
 }
 
 StereoModulator::StereoModulator(SampleSink* next)
@@ -459,7 +500,8 @@ StereoModulator::~StereoModulator() {
 }
 
 SampleSink* StereoModulator::getChannel(int channel) {
-    return new ModulatorInput(this, channel);  // never freed, cos I'm a rebel...
+    // TODO never freed, cos I'm a rebel...
+    return new ModulatorInput(this, channel);
 }
 
 void StereoModulator::consume(float* data, int num, const int channel) {
@@ -493,6 +535,12 @@ void StereoModulator::consume(float* data, int num, const int channel) {
         num -= consumable;
         consume(data, num, channel);
     }
+}
+
+
+int StereoModulator::getSampleRate() const {
+    assert(false && "Unimplemented");
+    return -1;
 }
 
 
