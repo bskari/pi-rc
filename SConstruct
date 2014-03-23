@@ -12,5 +12,12 @@ pi_fm_target = environment.Program(
         'pi_radio.cpp',
     )
 )
+pi_pcm_target = environment.Program(
+    target='pi_pcm',
+    source=(
+        'pi_pcm.cpp',
+        'pi_radio.cpp',
+    )
+)
 
-Default(pi_fm_target)
+Default(pi_pcm_target)
