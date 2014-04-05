@@ -1,23 +1,22 @@
 # vim: set syntax=python
 debug_flags = '-g'
-warning_flags = '-Wall -Wextra -Weffc++ -Wshadow -Wswitch-enum -Wswitch-default'
+c_warning_flags = '-Wall -Wextra -Wshadow -Wswitch-enum -Wswitch-default'
+cxx_warning_flags = c_warning_flags + ' -Weffc++'
+linker_flags = '-lm'
 environment = Environment()
 
-environment.Append(CXXFLAGS=' '.join((debug_flags, warning_flags)))
+environment.Append(
+    CFLAGS=' '.join((debug_flags, c_warning_flags)),
+    CXXFLAGS=' '.join((debug_flags, cxx_warning_flags)),
+    LINKFLAGS=linker_flags,
+)
 
 pi_fm_target = environment.Program(
     target='pi_fm',
     source=(
-        'pi_fm.cpp',
-        'pi_radio.cpp',
-    )
-)
-pi_pcm_target = environment.Program(
-    target='pi_pcm',
-    source=(
-        'pi_pcm.cpp',
-        'pi_radio.cpp',
+        'pi_fm.c',
+        'pi_radio.c',
     )
 )
 
-Default(pi_pcm_target)
+Default(pi_fm_target)
