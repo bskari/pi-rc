@@ -141,10 +141,9 @@
 #define GPFSEL0         (0x00/4)
 
 #define PLLFREQ         500000000   // PLLD is running at 500MHz
-#define CARRIERFREQ     100000000   // Carrier frequency is 100MHz
 // The deviation specifies how wide the signal is. Use 25.0 for WBFM
 // (broadcast radio) and about 3.5 for NBFM (walkie-talkie style radio)
-#define DEVIATION       3.0
+#define DEVIATION       25.0
 
 typedef struct {
     uint32_t info, src, dst, length,
@@ -189,9 +188,10 @@ udelay(int us) {
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 static void
 terminate(int unused) {
+    printf("Terminating\n");
     if (dma_reg) {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
-        udelay(10);
+        udelay(500);
     }
     exit(1);
 }
@@ -249,7 +249,7 @@ map_peripheral(uint32_t base, uint32_t len) {
 
 int
 main(int argc, char** argv) {
-    int i, mem_fd, pid, freq_ctl, file_fd;
+    int i, mem_fd, pid, file_fd;
     char pagemap_fn[64];
 
     // Catch all signals possible - it is vital we kill the DMA engine
@@ -264,7 +264,20 @@ main(int argc, char** argv) {
 
     // Calculate the frequency control word
     // The fractional part is stored in the lower 12 bits
-    freq_ctl = ((float)(PLLFREQ / CARRIERFREQ)) * ( 1 << 12 );
+    float frequency;
+    if (argc > 2) {
+        frequency = atof(argv[2]);
+        if (frequency > 105.0f || frequency < 85.0f) {
+            frequency = 100.0;
+        }
+    } else {
+        frequency = 100.0;
+    }
+    printf("Broadcasting at %0.1f\n", frequency);
+
+    const float poll_per_carrier = ((float)PLLFREQ / 1000000.0f) / frequency;
+    printf("%f\n", poll_per_carrier);
+    const int freq_ctl = (int)round(poll_per_carrier * (1 << 12));
 
     dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
