@@ -58,20 +58,21 @@
  * Richard Hirst <richardghirst@gmail.com>  December 2012
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
+#include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include <math.h>
-#include <time.h>
-#include <signal.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
 
 // The .wav file is mono at 22050Hz, which means we have a new sample every
 // 45.4us.  We want to adjust the 100MHz core frequency at 10 times that so as
@@ -249,7 +250,7 @@ map_peripheral(uint32_t base, uint32_t len) {
 
 int
 main(int argc, char** argv) {
-    int i, mem_fd, pid, file_fd;
+    int i, mem_fd, pid;
     char pagemap_fn[64];
 
     // Catch all signals possible - it is vital we kill the DMA engine
@@ -266,7 +267,7 @@ main(int argc, char** argv) {
     // The fractional part is stored in the lower 12 bits
     float frequency;
     if (argc > 2) {
-        frequency = atof(argv[2]);
+        frequency = atof(argv[1]);
         if (frequency > 105.0f || frequency < 85.0f) {
             frequency = 100.0;
         }
@@ -276,7 +277,6 @@ main(int argc, char** argv) {
     printf("Broadcasting at %0.1f\n", frequency);
 
     const float poll_per_carrier = ((float)PLLFREQ / 1000000.0f) / frequency;
-    printf("%f\n", poll_per_carrier);
     const int freq_ctl = (int)round(poll_per_carrier * (1 << 12));
 
     dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
@@ -393,39 +393,42 @@ main(int argc, char** argv) {
     dma_reg[DMA_DEBUG] = 7; // clear debug error flags
     dma_reg[DMA_CS] = 0x10880001;   // go, mid priority, wait for outstanding writes
 
-    // Nearly there.. open the .wav file specified on the cmdline
-    file_fd = 0;
-
-    if (argc > 1) {
-        file_fd = open(argv[1], 'r');
-
-        if (file_fd < 0) {
-            fatal("Failed to open .wav file\n");
-        }
-    } else {
-        fprintf(stderr, "Need a wav file.\n");
-        terminate(0);
-    }
-
-    short data[1024];
-    int data_len = read(file_fd, data, sizeof(data));
-    if (data_len < 0) {
-        fatal("Failed to read .wav file\n");
-    }
-    data_len /= 2;
-    if (data_len < 23) {
-        fatal("Initial read of .wav file too short\n");
-    }
-
     uint32_t last_cb = (uint32_t)ctl->cb;
-    int data_index = 22;
+    enum broadcast_state_t {
+        SYNCHRONIZATION_BURST_ON,
+        SYNCHRONIZATION_BURST_OFF,
+        SIGNAL_BURST_ON,
+        SIGNAL_BURST_OFF
+    };
+    enum broadcast_state_t state = SYNCHRONIZATION_BURST_OFF;
+    const float synchronization_burst_us = 2100;
+    const float synchronization_spacing_us = 700;
+    const int total_synchronizations = (argc > 2 ? atoi(argv[2]) : 4);
+    const float signal_burst_us = 700;
+    const float signal_spacing_us = 700;
+    const int total_signals = (argc > 3 ? atoi(argv[3]) : 52);
+
+    printf(
+        "Trying %d %0.0F us synchronization bursts (%0.0F us space)\n"
+        "with %d %0.0F us signal bursts (%0.0F us space)\n",
+        total_synchronizations,
+        synchronization_burst_us,
+        synchronization_spacing_us,
+        total_signals,
+        signal_burst_us,
+        signal_spacing_us
+    );
+
+    int synchronization_count = total_synchronizations;
+    int signal_count = total_signals;
+    float time_us = (float)synchronization_burst_us;
 
     for (;;) {
         usleep(10000);
 
-        uint32_t cur_cb = mem_phys_to_virt(dma_reg[DMA_CONBLK_AD]);
+        const uint32_t cur_cb = mem_phys_to_virt(dma_reg[DMA_CONBLK_AD]);
         int last_sample = (last_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
-        int this_sample = (cur_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
+        const int this_sample = (cur_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
         int free_slots = this_sample - last_sample;
 
         if (free_slots < 0) {
@@ -433,7 +436,49 @@ main(int argc, char** argv) {
         }
 
         while (free_slots >= 10) {
-            float dval = (float)(data[data_index]) / 65536.0 * DEVIATION;
+            float dval;
+            switch (state) {
+                case SYNCHRONIZATION_BURST_ON:
+                case SIGNAL_BURST_ON:
+                    dval = 65535.0f;
+                    break;
+                case SYNCHRONIZATION_BURST_OFF:
+                case SIGNAL_BURST_OFF:
+                    dval = 0.0f;
+                    break;
+                default:
+                    assert(0 && "Unknown state");
+            }
+            // I have no idea if this is right
+            time_us -= 1.0f;
+            if (time_us <= 0.0f) {
+                switch (state) {
+                    case SYNCHRONIZATION_BURST_ON:
+                        time_us = synchronization_spacing_us;
+                        --synchronization_count;
+                        if (synchronization_count == 0) {
+                            synchronization_count = total_synchronizations;
+                        }
+                        break;
+                    case SIGNAL_BURST_ON:
+                        time_us = signal_spacing_us;
+                        --signal_count;
+                        if (signal_count == 0) {
+                            signal_count = total_signals;
+                        }
+                        break;
+                    case SYNCHRONIZATION_BURST_OFF:
+                        time_us = synchronization_burst_us;
+                        break;
+                    case SIGNAL_BURST_OFF:
+                        time_us = signal_burst_us;
+                        break;
+                    default:
+                        assert(0 && "Unknown state");
+                }
+            }
+            assert(time_us > 0.0f && "Time should be positive");
+
             int intval = (int)((floor)(dval));
             int frac = (int)((dval - (float)intval) * 10.0);
             int j;
@@ -448,18 +493,6 @@ main(int argc, char** argv) {
                 }
             }
             free_slots -= 10;
-            if (++data_index >= data_len) {
-                data_len = read(file_fd, data, sizeof(data));
-                data_index = 0;
-                if (data_len < 0) {
-                    fatal("Error reading data: %m\n");
-                }
-                // Should really wait for outstanding samples to be processed here..
-                data_len /= 2;
-                if (data_len == 0) {
-                    terminate(0);
-                }
-            }
         }
         last_cb = (uint32_t)virtbase + last_sample * sizeof(dma_cb_t) * 2;
     }
