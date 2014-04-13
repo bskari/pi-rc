@@ -315,7 +315,6 @@ main(int argc, char** argv) {
     ) {
         fatal("Failed to seek on %s: %m\n", pagemap_fn);
     }
-//  printf("Page map:\n");
     for (i = 0; i < NUM_PAGES; i++) {
         uint64_t pfn;
         page_map[i].virtaddr = virtbase + i * PAGE_SIZE;
@@ -328,7 +327,6 @@ main(int argc, char** argv) {
             fatal("Page %d not present (pfn 0x%016llx)\n", i, pfn);
         }
         page_map[i].physaddr = (uint32_t)pfn << PAGE_SHIFT | 0x40000000;
-//      printf("  %2d: %8p ==> 0x%08x [0x%016llx]\n", i, page_map[i].virtaddr, page_map[i].physaddr, pfn);
     }
 
     // GPIO4 needs to be ALT FUNC 0 to otuput the clock
