@@ -70,6 +70,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -269,10 +270,10 @@ main(int argc, char** argv) {
     if (argc > 2) {
         frequency = atof(argv[1]);
         if (frequency > 105.0f || frequency < 85.0f) {
-            frequency = 100.0;
+            frequency = 100.0f;
         }
     } else {
-        frequency = 100.0;
+        frequency = 100.0f;
     }
     printf("Broadcasting at %0.1f\n", frequency);
 
@@ -395,18 +396,20 @@ main(int argc, char** argv) {
 
     uint32_t last_cb = (uint32_t)ctl->cb;
     enum broadcast_state_t {
-        SYNCHRONIZATION_BURST_ON,
-        SYNCHRONIZATION_BURST_OFF,
-        SIGNAL_BURST_ON,
-        SIGNAL_BURST_OFF
+        SYNCHRONIZATION_BURST,
+        SYNCHRONIZATION_SPACING,
+        SIGNAL_BURST,
+        SIGNAL_SPACING
     };
-    enum broadcast_state_t state = SYNCHRONIZATION_BURST_OFF;
+    enum broadcast_state_t state = SYNCHRONIZATION_BURST;
     const float synchronization_burst_us = 2100;
     const float synchronization_spacing_us = 700;
     const int total_synchronizations = (argc > 2 ? atoi(argv[2]) : 4);
     const float signal_burst_us = 700;
     const float signal_spacing_us = 700;
     const int total_signals = (argc > 3 ? atoi(argv[3]) : 52);
+
+    int iterations = 0;
 
     printf(
         "Trying %d %0.0F us synchronization bursts (%0.0F us space)\n"
@@ -423,7 +426,10 @@ main(int argc, char** argv) {
     int signal_count = total_signals;
     float time_us = (float)synchronization_burst_us;
 
-    for (;;) {
+    struct timeval start_time;
+    gettimeofday(&start_time, NULL);
+
+    for (i = 0; i < 2000; ++i) {
         usleep(10000);
 
         const uint32_t cur_cb = mem_phys_to_virt(dma_reg[DMA_CONBLK_AD]);
@@ -438,40 +444,52 @@ main(int argc, char** argv) {
         while (free_slots >= 10) {
             float dval;
             switch (state) {
-                case SYNCHRONIZATION_BURST_ON:
-                case SIGNAL_BURST_ON:
+                case SYNCHRONIZATION_BURST:
+                case SIGNAL_BURST:
                     dval = 65535.0f;
                     break;
-                case SYNCHRONIZATION_BURST_OFF:
-                case SIGNAL_BURST_OFF:
+                case SYNCHRONIZATION_SPACING:
+                case SIGNAL_SPACING:
                     dval = 0.0f;
                     break;
                 default:
                     assert(0 && "Unknown state");
             }
-            // I have no idea if this is right
-            time_us -= 1.0f;
+
+            // I have no idea if this subtraction is right
+            // 44,300 is the bit rate of wav files
+            time_us -= 44.300f;
+
             if (time_us <= 0.0f) {
                 switch (state) {
-                    case SYNCHRONIZATION_BURST_ON:
+                    case SYNCHRONIZATION_BURST:
                         time_us = synchronization_spacing_us;
+                        state = SYNCHRONIZATION_SPACING;
+                        break;
+                    case SIGNAL_BURST:
+                        time_us = signal_spacing_us;
+                        state = SIGNAL_SPACING;
+                        break;
+                    case SYNCHRONIZATION_SPACING:
+                        time_us = synchronization_burst_us;
                         --synchronization_count;
                         if (synchronization_count == 0) {
                             synchronization_count = total_synchronizations;
+                            state = SIGNAL_BURST;
+                        } else {
+                            state = SYNCHRONIZATION_BURST;
                         }
                         break;
-                    case SIGNAL_BURST_ON:
-                        time_us = signal_spacing_us;
+                    case SIGNAL_SPACING:
+                        time_us = signal_burst_us;
                         --signal_count;
                         if (signal_count == 0) {
                             signal_count = total_signals;
+                            state = SYNCHRONIZATION_BURST;
+                            ++iterations;
+                        } else {
+                            state = SIGNAL_BURST;
                         }
-                        break;
-                    case SYNCHRONIZATION_BURST_OFF:
-                        time_us = synchronization_burst_us;
-                        break;
-                    case SIGNAL_BURST_OFF:
-                        time_us = signal_burst_us;
                         break;
                     default:
                         assert(0 && "Unknown state");
@@ -496,6 +514,23 @@ main(int argc, char** argv) {
         }
         last_cb = (uint32_t)virtbase + last_sample * sizeof(dma_cb_t) * 2;
     }
+
+    struct timeval end_time;
+    gettimeofday(&end_time, NULL);
+    const float synchronization_us = (synchronization_burst_us + synchronization_spacing_us) * total_synchronizations;
+    const float signal_us = (signal_burst_us + signal_spacing_us) * total_signals;
+    float seconds = end_time.tv_sec - start_time.tv_sec;
+    if (end_time.tv_usec < start_time.tv_usec) {
+        seconds -= 1.0f;
+    }
+    seconds += (end_time.tv_usec - start_time.tv_usec) / 1000000.0f;
+    printf(
+        "%d iterations (each %F us) in %F seconds, expected %F\n",
+        iterations,
+        synchronization_us + signal_us,
+        seconds,
+        seconds * 1000000.0f / (synchronization_us + signal_us)
+    );
 
     terminate(0);
 
