@@ -177,80 +177,15 @@ struct control_data_s {
 
 static struct control_data_s* ctl;
 
-static void
-udelay(int us) {
-    struct timespec ts = { 0, us * 1000 };
+static void udelay(int us);
+static void terminate(int unused);
+static void fatal(char* fmt, ...);
+static uint32_t mem_virt_to_phys(void* virt);
+static uint32_t mem_phys_to_virt(uint32_t phys);
+static void* map_peripheral(uint32_t base, uint32_t len);
 
-    nanosleep(&ts, NULL);
-}
 
-// The int is a dummy parameter so that the function can be used as a signal
-// handlers
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-static void
-terminate(int unused) {
-    printf("Terminating\n");
-    if (dma_reg) {
-        dma_reg[DMA_CS] = BCM2708_DMA_RESET;
-        udelay(500);
-    }
-    exit(1);
-}
-#pragma GCC diagnostic pop
-
-static void
-fatal(char* fmt, ...) {
-    va_list ap;
-
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    terminate(0);
-}
-
-static uint32_t
-mem_virt_to_phys(void* virt) {
-    uint32_t offset = (uint8_t*)virt - virtbase;
-
-    return page_map[offset >> PAGE_SHIFT].physaddr + (offset % PAGE_SIZE);
-}
-
-static uint32_t
-mem_phys_to_virt(uint32_t phys) {
-    uint32_t pg_offset = phys & (PAGE_SIZE - 1);
-    uint32_t pg_addr = phys - pg_offset;
-    int i;
-
-    for (i = 0; i < NUM_PAGES; i++) {
-        if (page_map[i].physaddr == pg_addr) {
-            return (uint32_t)virtbase + i * PAGE_SIZE + pg_offset;
-        }
-    }
-    fatal("Failed to reverse map phys addr %08x\n", phys);
-
-    return 0;
-}
-
-static void*
-map_peripheral(uint32_t base, uint32_t len) {
-    int fd = open("/dev/mem", O_RDWR);
-    void* vaddr;
-
-    if (fd < 0) {
-        fatal("Failed to open /dev/mem: %m\n");
-    }
-    vaddr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
-    if (vaddr == MAP_FAILED) {
-        fatal("Failed to map peripheral at 0x%08x: %m\n", base);
-    }
-    close(fd);
-
-    return vaddr;
-}
-
-int
-main(int argc, char** argv) {
+int main(int argc, char** argv) {
     int i, mem_fd, pid;
     char pagemap_fn[64];
 
@@ -535,4 +470,75 @@ main(int argc, char** argv) {
     terminate(0);
 
     return 0;
+}
+
+
+static void udelay(int us) {
+    struct timespec ts = { 0, us * 1000 };
+    nanosleep(&ts, NULL);
+}
+
+
+// The int is a dummy parameter so that the function can be used as a signal
+// handlers
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+static void terminate(int unused) {
+    printf("Terminating\n");
+    if (dma_reg) {
+        dma_reg[DMA_CS] = BCM2708_DMA_RESET;
+        udelay(500);
+    }
+    exit(1);
+}
+#pragma GCC diagnostic pop
+
+
+static void fatal(char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    terminate(0);
+}
+
+
+static uint32_t mem_virt_to_phys(void* virt) {
+    uint32_t offset = (uint8_t*)virt - virtbase;
+
+    return page_map[offset >> PAGE_SHIFT].physaddr + (offset % PAGE_SIZE);
+}
+
+
+static uint32_t mem_phys_to_virt(uint32_t phys) {
+    uint32_t pg_offset = phys & (PAGE_SIZE - 1);
+    uint32_t pg_addr = phys - pg_offset;
+    int i;
+
+    for (i = 0; i < NUM_PAGES; i++) {
+        if (page_map[i].physaddr == pg_addr) {
+            return (uint32_t)virtbase + i * PAGE_SIZE + pg_offset;
+        }
+    }
+    fatal("Failed to reverse map phys addr %08x\n", phys);
+
+    return 0;
+}
+
+
+
+static void* map_peripheral(uint32_t base, uint32_t len) {
+    int fd = open("/dev/mem", O_RDWR);
+    void* vaddr;
+
+    if (fd < 0) {
+        fatal("Failed to open /dev/mem: %m\n");
+    }
+    vaddr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
+    if (vaddr == MAP_FAILED) {
+        fatal("Failed to map peripheral at 0x%08x: %m\n", base);
+    }
+    close(fd);
+
+    return vaddr;
 }
