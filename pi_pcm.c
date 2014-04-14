@@ -157,6 +157,18 @@ typedef struct {
     uint32_t physaddr;
 } page_map_t;
 
+struct command_node {
+    struct command_node* next;
+    // I could specify smaller datatypes for these... but who cares about
+    // saving a few bytes
+    float synchronization_burst_us;
+    float synchronization_spacing_us;
+    int total_synchronizations;
+    float signal_burst_us;
+    float signal_spacing_us;
+    int total_signals;
+};
+
 page_map_t* page_map;
 
 static uint8_t* virtbase;
@@ -183,6 +195,20 @@ static void fatal(char* fmt, ...);
 static uint32_t mem_virt_to_phys(void* virt);
 static uint32_t mem_phys_to_virt(uint32_t phys);
 static void* map_peripheral(uint32_t base, uint32_t len);
+static int fill_buffer(
+    struct command_node** command,
+    struct control_data_s* ctl_,
+    const volatile uint32_t* dma_reg_,
+    const int frequency_control
+);
+static struct command_node* allocate_command_node(
+    float synchronization_burst_us,
+    float synchronization_spacing_us,
+    int total_synchronizations,
+    float signal_burst_us,
+    float signal_spacing_us,
+    int total_signals
+);
 
 
 int main(int argc, char** argv) {
@@ -329,143 +355,25 @@ int main(int argc, char** argv) {
     dma_reg[DMA_DEBUG] = 7; // clear debug error flags
     dma_reg[DMA_CS] = 0x10880001;   // go, mid priority, wait for outstanding writes
 
-    uint32_t last_cb = (uint32_t)ctl->cb;
-    enum broadcast_state_t {
-        SYNCHRONIZATION_BURST,
-        SYNCHRONIZATION_SPACING,
-        SIGNAL_BURST,
-        SIGNAL_SPACING
-    };
-    enum broadcast_state_t state = SYNCHRONIZATION_BURST;
-    const float synchronization_burst_us = 2100;
-    const float synchronization_spacing_us = 700;
-    const int total_synchronizations = (argc > 2 ? atoi(argv[2]) : 4);
-    const float signal_burst_us = 700;
-    const float signal_spacing_us = 700;
-    const int total_signals = (argc > 3 ? atoi(argv[3]) : 52);
-
-    int iterations = 0;
-
-    printf(
-        "Trying %d %0.0F us synchronization bursts (%0.0F us space)\n"
-        "with %d %0.0F us signal bursts (%0.0F us space)\n",
-        total_synchronizations,
-        synchronization_burst_us,
-        synchronization_spacing_us,
-        total_signals,
-        signal_burst_us,
-        signal_spacing_us
-    );
-
-    int synchronization_count = total_synchronizations;
-    int signal_count = total_signals;
-    float time_us = (float)synchronization_burst_us;
-
-    struct timeval start_time;
-    gettimeofday(&start_time, NULL);
+    struct command_node* root;
+    root = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+    root->next = NULL;
+    struct command_node** tail = &(root->next);
+    for (i = 0; i < 4; ++i) {
+        *tail = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+        tail = &((*tail)->next);
+    }
 
     for (i = 0; i < 2000; ++i) {
         usleep(10000);
-
-        const uint32_t cur_cb = mem_phys_to_virt(dma_reg[DMA_CONBLK_AD]);
-        int last_sample = (last_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
-        const int this_sample = (cur_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
-        int free_slots = this_sample - last_sample;
-
-        if (free_slots < 0) {
-            free_slots += NUM_SAMPLES;
+        // We need to keep refilling the command buffer
+        const int nodes_removed = fill_buffer(&root, ctl, dma_reg, freq_ctl);
+        int j;
+        for (j = 0; j < nodes_removed; ++j) {
+            *tail = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+            tail = &((*tail)->next);
         }
-
-        while (free_slots >= 10) {
-            float dval;
-            switch (state) {
-                case SYNCHRONIZATION_BURST:
-                case SIGNAL_BURST:
-                    dval = 65535.0f;
-                    break;
-                case SYNCHRONIZATION_SPACING:
-                case SIGNAL_SPACING:
-                    dval = 0.0f;
-                    break;
-                default:
-                    assert(0 && "Unknown state");
-            }
-
-            // I have no idea if this subtraction is right
-            // 44,300 is the bit rate of wav files
-            time_us -= 44.300f;
-
-            if (time_us <= 0.0f) {
-                switch (state) {
-                    case SYNCHRONIZATION_BURST:
-                        time_us = synchronization_spacing_us;
-                        state = SYNCHRONIZATION_SPACING;
-                        break;
-                    case SIGNAL_BURST:
-                        time_us = signal_spacing_us;
-                        state = SIGNAL_SPACING;
-                        break;
-                    case SYNCHRONIZATION_SPACING:
-                        time_us = synchronization_burst_us;
-                        --synchronization_count;
-                        if (synchronization_count == 0) {
-                            synchronization_count = total_synchronizations;
-                            state = SIGNAL_BURST;
-                        } else {
-                            state = SYNCHRONIZATION_BURST;
-                        }
-                        break;
-                    case SIGNAL_SPACING:
-                        time_us = signal_burst_us;
-                        --signal_count;
-                        if (signal_count == 0) {
-                            signal_count = total_signals;
-                            state = SYNCHRONIZATION_BURST;
-                            ++iterations;
-                        } else {
-                            state = SIGNAL_BURST;
-                        }
-                        break;
-                    default:
-                        assert(0 && "Unknown state");
-                }
-            }
-            assert(time_us > 0.0f && "Time should be positive");
-
-            int intval = (int)((floor)(dval));
-            int frac = (int)((dval - (float)intval) * 10.0);
-            int j;
-
-            // I'm sure this code could do a better job of subsampling, either by
-            // distributing the '+1's evenly across the 10 subsamples, or maybe
-            // by taking the previous and next samples in to account too.
-            for (j = 0; j < 10; j++) {
-                ctl->sample[last_sample++] = (0x5A << 24 | freq_ctl) + (frac > j ? intval + 1 : intval);
-                if (last_sample == NUM_SAMPLES) {
-                    last_sample = 0;
-                }
-            }
-            free_slots -= 10;
-        }
-        last_cb = (uint32_t)virtbase + last_sample * sizeof(dma_cb_t) * 2;
     }
-
-    struct timeval end_time;
-    gettimeofday(&end_time, NULL);
-    const float synchronization_us = (synchronization_burst_us + synchronization_spacing_us) * total_synchronizations;
-    const float signal_us = (signal_burst_us + signal_spacing_us) * total_signals;
-    float seconds = end_time.tv_sec - start_time.tv_sec;
-    if (end_time.tv_usec < start_time.tv_usec) {
-        seconds -= 1.0f;
-    }
-    seconds += (end_time.tv_usec - start_time.tv_usec) / 1000000.0f;
-    printf(
-        "%d iterations (each %F us) in %F seconds, expected %F\n",
-        iterations,
-        synchronization_us + signal_us,
-        seconds,
-        seconds * 1000000.0f / (synchronization_us + signal_us)
-    );
 
     terminate(0);
 
@@ -541,4 +449,149 @@ static void* map_peripheral(uint32_t base, uint32_t len) {
     close(fd);
 
     return vaddr;
+}
+
+
+int fill_buffer(
+    struct command_node** command_list,
+    struct control_data_s* ctl_,
+    const volatile uint32_t* const dma_reg_,
+    const int frequency_control
+) {
+    int nodes_processed = 0;
+    assert(command_list != NULL);
+    struct command_node* first_command = *command_list;
+    assert(first_command != NULL);
+    if (first_command == NULL) {
+        // Uh... Let's just make something up
+        *command_list = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+    }
+
+    static enum {
+        SYNCHRONIZATION_BURST,
+        SYNCHRONIZATION_SPACING,
+        SIGNAL_BURST,
+        SIGNAL_SPACING
+    } state = SYNCHRONIZATION_BURST;
+
+    static float time_us = 0.0f;
+    static int synchronization_count = -1;
+    if (synchronization_count == -1) {
+        synchronization_count = first_command->total_synchronizations;
+    }
+    static int signal_count = -1;
+    if (signal_count == -1) {
+        signal_count = first_command->total_signals;
+    }
+
+    static uint32_t last_cb = 0;
+    if (last_cb == 0) {
+        last_cb = (uint32_t)ctl->cb;
+    }
+    const uint32_t cur_cb = mem_phys_to_virt(dma_reg_[DMA_CONBLK_AD]);
+    int last_sample = (last_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
+    const int this_sample = (cur_cb - (uint32_t)virtbase) / (sizeof(dma_cb_t) * 2);
+    int free_slots = this_sample - last_sample;
+
+    if (free_slots < 0) {
+        free_slots += NUM_SAMPLES;
+    }
+
+    while (free_slots >= 10) {
+        float dval;
+        switch (state) {
+            case SYNCHRONIZATION_BURST:
+            case SIGNAL_BURST:
+                dval = 65535.0f;
+                break;
+            case SYNCHRONIZATION_SPACING:
+            case SIGNAL_SPACING:
+                dval = 0.0f;
+                break;
+            default:
+                assert(0 && "Unknown state");
+        }
+
+        // I have no idea if this subtraction is right
+        // 44,300 is the bit rate of wav files
+        time_us -= 44.300f;
+
+        if (time_us <= 0.0f) {
+            switch (state) {
+                case SYNCHRONIZATION_BURST:
+                    time_us = first_command->synchronization_spacing_us;
+                    state = SYNCHRONIZATION_SPACING;
+                    break;
+                case SIGNAL_BURST:
+                    time_us = first_command->signal_spacing_us;
+                    state = SIGNAL_SPACING;
+                    break;
+                case SYNCHRONIZATION_SPACING:
+                    time_us = first_command->synchronization_burst_us;
+                    --synchronization_count;
+                    if (synchronization_count == 0) {
+                        synchronization_count = first_command->total_synchronizations;
+                        state = SIGNAL_BURST;
+                    } else {
+                        state = SYNCHRONIZATION_BURST;
+                    }
+                    break;
+                case SIGNAL_SPACING:
+                    time_us = first_command->signal_burst_us;
+                    --signal_count;
+                    if (signal_count == 0) {
+                        // Process the next command
+                        *command_list = first_command->next;
+                        free(first_command);
+                        first_command = *command_list;
+                        ++nodes_processed;
+                        signal_count = first_command->total_signals;
+                        state = SYNCHRONIZATION_BURST;
+                    } else {
+                        state = SIGNAL_BURST;
+                    }
+                    break;
+                default:
+                    assert(0 && "Unknown state");
+            }
+        }
+        assert(time_us > 0.0f && "Time should be positive");
+
+        int intval = (int)((floor)(dval));
+        int frac = (int)((dval - (float)intval) * 10.0);
+        int j;
+
+        // I'm sure this code could do a better job of subsampling, either by
+        // distributing the '+1's evenly across the 10 subsamples, or maybe
+        // by taking the previous and next samples in to account too.
+        for (j = 0; j < 10; j++) {
+            ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control) + (frac > j ? intval + 1 : intval);
+            if (last_sample == NUM_SAMPLES) {
+                last_sample = 0;
+            }
+        }
+        free_slots -= 10;
+    }
+    last_cb = (uint32_t)virtbase + last_sample * sizeof(dma_cb_t) * 2;
+    return nodes_processed;
+}
+
+
+struct command_node* allocate_command_node(
+    float synchronization_burst_us,
+    float synchronization_spacing_us,
+    int total_synchronizations,
+    float signal_burst_us,
+    float signal_spacing_us,
+    int total_signals
+) {
+    struct command_node* new_node = malloc(sizeof(*new_node));
+    new_node->next = NULL;
+    new_node->synchronization_burst_us = synchronization_burst_us;
+    new_node->synchronization_spacing_us = synchronization_spacing_us;
+    new_node->total_synchronizations = total_synchronizations;
+    new_node->signal_burst_us = signal_burst_us;
+    new_node->signal_spacing_us = signal_spacing_us;
+    new_node->total_signals = total_signals;
+    return new_node;
 }
