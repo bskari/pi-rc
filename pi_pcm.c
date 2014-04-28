@@ -142,7 +142,6 @@
 
 #define GPFSEL0         (0x00/4)
 
-#define PLLFREQ         500000000   // PLLD is running at 500MHz
 // The deviation specifies how wide the signal is. Use 25.0 for WBFM
 // (broadcast radio) and about 3.5 for NBFM (walkie-talkie style radio)
 #define DEVIATION       25.0
@@ -167,6 +166,9 @@ struct command_node {
     float signal_burst_us;
     float signal_spacing_us;
     int total_signals;
+    int frequency_control;
+    int dead_frequency_control;
+    float frequency;
 };
 
 page_map_t* page_map;
@@ -198,16 +200,17 @@ static void* map_peripheral(uint32_t base, uint32_t len);
 static int fill_buffer(
     struct command_node** command,
     struct control_data_s* ctl_,
-    const volatile uint32_t* dma_reg_,
-    const int frequency_control
+    const volatile uint32_t* dma_reg_
 );
+static int frequency_to_control(float frequency);
 static struct command_node* allocate_command_node(
     float synchronization_burst_us,
     float synchronization_spacing_us,
     int total_synchronizations,
     float signal_burst_us,
     float signal_spacing_us,
-    int total_signals
+    int total_signals,
+    float frequency
 );
 
 
@@ -228,18 +231,15 @@ int main(int argc, char** argv) {
     // Calculate the frequency control word
     // The fractional part is stored in the lower 12 bits
     float frequency;
-    if (argc > 2) {
+    if (argc > 1) {
         frequency = atof(argv[1]);
-        if (frequency > 105.0f || frequency < 85.0f) {
+        if (frequency > 250.0f || frequency < 1.0f) {
             frequency = 100.0f;
         }
     } else {
         frequency = 100.0f;
     }
     printf("Broadcasting at %0.1f\n", frequency);
-
-    const float poll_per_carrier = ((float)PLLFREQ / 1000000.0f) / frequency;
-    const int freq_ctl = (int)round(poll_per_carrier * (1 << 12));
 
     dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
@@ -304,8 +304,9 @@ int main(int argc, char** argv) {
     uint32_t phys_sample_dst = CM_GP0DIV;
     uint32_t phys_pwm_fifo_addr = 0x7e20c000 + 0x18;
 
+    const int frequency_control = frequency_to_control(frequency);
     for (i = 0; i < NUM_SAMPLES; i++) {
-        ctl->sample[i] = 0x5a << 24 | freq_ctl; // Silence
+        ctl->sample[i] = 0x5a << 24 | frequency_control; // Silence
         // Write a frequency sample
         cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
         cbp->src = mem_virt_to_phys(ctl->sample + i);
@@ -356,22 +357,65 @@ int main(int argc, char** argv) {
     dma_reg[DMA_CS] = 0x10880001;   // go, mid priority, wait for outstanding writes
 
     struct command_node* root;
-    root = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+    root = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53, 100.0f);
     root->next = NULL;
     struct command_node** tail = &(root->next);
-    for (i = 0; i < 4; ++i) {
-        *tail = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+    // Fill the buffer with some initial commands
+    for (i = 0; i < 10; ++i) {
+        // 88.5 is NPR in Boulder, which is easy to find on a radio
+        const float test_frequency = 88.5f;
+        // For testing, broadcast at a frequency for 0.5 seconds
+        *tail = allocate_command_node(500.0f, 1.0f, 1000, 1.0f, 1.0f, 1, test_frequency);
         tail = &((*tail)->next);
     }
 
-    for (i = 0; i < 2000; ++i) {
-        usleep(10000);
-        // We need to keep refilling the command buffer
-        const int nodes_removed = fill_buffer(&root, ctl, dma_reg, freq_ctl);
-        int j;
-        for (j = 0; j < nodes_removed; ++j) {
-            *tail = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
-            tail = &((*tail)->next);
+    float test_frequency;
+    float us;
+    int synchronization_burst_count;
+    int synchronization_burst_length_multiplier;
+    int command_burst_count;
+    // Toy RC car frequencies are 49.830, 49.845, 49.860, 49.875, 49.890
+    for (test_frequency = 49.780f; test_frequency <= 49.930f; test_frequency += 0.01f) {
+        for (us = 200.0f; us < 1000.0f + 1.0f; us += 50.0f) {
+            for (synchronization_burst_count = 2; synchronization_burst_count <= 6; ++synchronization_burst_count) {
+                for (synchronization_burst_length_multiplier = 2; synchronization_burst_length_multiplier <= 5; ++synchronization_burst_length_multiplier) {
+                    for (command_burst_count = 10; command_burst_count <= 100; ++command_burst_count) {
+                        printf(
+                            "Adding %d %4.1f:%4.1f sync bursts, %d %4.1f:%4.1f signal bursts @ %4.5f\n",
+                            synchronization_burst_count,
+                            synchronization_burst_length_multiplier * us,
+                            us,
+                            command_burst_count,
+                            us,
+                            us,
+                            test_frequency
+                        );
+                        // Each command should run for at least 1/2 second
+                        const float us_per_synchronization = us * (1 + synchronization_burst_length_multiplier) * synchronization_burst_count;
+                        const float us_per_burst = us * (2 * command_burst_count);
+                        const int limit = (int)((1000000.0f * 0.5f) / (us_per_synchronization + us_per_burst));
+                        for (i = 0; i < limit;) { // We'll increment i when a node is removed
+                            usleep(10000);
+                            // We need to keep refilling the command buffer
+                            const int nodes_removed = fill_buffer(&root, ctl, dma_reg);
+                            i += nodes_removed;
+                            int j;
+                            for (j = 0; j < nodes_removed; ++j) {
+                                *tail = allocate_command_node(
+                                    us * synchronization_burst_length_multiplier,
+                                    us,
+                                    synchronization_burst_count,
+                                    us,
+                                    us,
+                                    command_burst_count,
+                                    test_frequency
+                                );
+                                tail = &((*tail)->next);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -387,19 +431,14 @@ static void udelay(int us) {
 }
 
 
-// The int is a dummy parameter so that the function can be used as a signal
-// handlers
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-static void terminate(int unused) {
-    printf("Terminating\n");
+static void terminate(const int signal_) {
+    printf("Terminating with signal %d\n", signal_);
     if (dma_reg) {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
         udelay(500);
     }
     exit(1);
 }
-#pragma GCC diagnostic pop
 
 
 static void fatal(char* fmt, ...) {
@@ -455,8 +494,7 @@ static void* map_peripheral(uint32_t base, uint32_t len) {
 int fill_buffer(
     struct command_node** command_list,
     struct control_data_s* ctl_,
-    const volatile uint32_t* const dma_reg_,
-    const int frequency_control
+    const volatile uint32_t* const dma_reg_
 ) {
     int nodes_processed = 0;
     assert(command_list != NULL);
@@ -464,7 +502,7 @@ int fill_buffer(
     assert(first_command != NULL);
     if (first_command == NULL) {
         // Uh... Let's just make something up
-        *command_list = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53);
+        *command_list = allocate_command_node(2100.0f, 700.0f, 4, 700.0f, 700.0f, 53, 100.0f);
     }
 
     static enum {
@@ -498,20 +536,6 @@ int fill_buffer(
     }
 
     while (free_slots >= 10) {
-        float dval;
-        switch (state) {
-            case SYNCHRONIZATION_BURST:
-            case SIGNAL_BURST:
-                dval = 65535.0f;
-                break;
-            case SYNCHRONIZATION_SPACING:
-            case SIGNAL_SPACING:
-                dval = 0.0f;
-                break;
-            default:
-                assert(0 && "Unknown state");
-        }
-
         // I have no idea if this subtraction is right
         // 44,300 is the bit rate of wav files
         time_us -= 44.300f;
@@ -522,10 +546,6 @@ int fill_buffer(
                     time_us = first_command->synchronization_spacing_us;
                     state = SYNCHRONIZATION_SPACING;
                     break;
-                case SIGNAL_BURST:
-                    time_us = first_command->signal_spacing_us;
-                    state = SIGNAL_SPACING;
-                    break;
                 case SYNCHRONIZATION_SPACING:
                     time_us = first_command->synchronization_burst_us;
                     --synchronization_count;
@@ -535,6 +555,10 @@ int fill_buffer(
                     } else {
                         state = SYNCHRONIZATION_BURST;
                     }
+                    break;
+                case SIGNAL_BURST:
+                    time_us = first_command->signal_spacing_us;
+                    state = SIGNAL_SPACING;
                     break;
                 case SIGNAL_SPACING:
                     time_us = first_command->signal_burst_us;
@@ -557,10 +581,27 @@ int fill_buffer(
         }
         assert(time_us > 0.0f && "Time should be positive");
 
-        int intval = (int)((floor)(dval));
-        int frac = (int)((dval - (float)intval) * 10.0);
+        // In the original FM radio code, dval would be loaded from a wav file.
+        // For the RC car, I don't know what to do.
+        const float dval = 0.0f;
+        const int intval = (int)(floor(dval));
+        const int frac = (int)((dval - (float)intval) * 10.0);
         int j;
 
+        int frequency_control;
+        switch (state) {
+            case SYNCHRONIZATION_BURST:
+            case SIGNAL_BURST:
+                frequency_control = first_command->frequency_control;
+                break;
+            case SYNCHRONIZATION_SPACING:
+            case SIGNAL_SPACING:
+                frequency_control = first_command->dead_frequency_control;
+                break;
+            default:
+                assert(0 && "Unknown state when looking for frequency control");
+                frequency_control = first_command->frequency_control;
+        }
         // I'm sure this code could do a better job of subsampling, either by
         // distributing the '+1's evenly across the 10 subsamples, or maybe
         // by taking the previous and next samples in to account too.
@@ -577,15 +618,25 @@ int fill_buffer(
 }
 
 
+static int frequency_to_control(const float frequency) {
+    const int PLLFREQ = 500000000;  // PLLD is running at 500MHz
+    const float PLL_MHZ = (float)PLLFREQ / 1000000.0f;
+    const float poll_per_carrier = PLL_MHZ / frequency;
+    const int frequency_control = (int)round(poll_per_carrier * (1 << 12));
+    return frequency_control;
+}
+
+
 struct command_node* allocate_command_node(
-    float synchronization_burst_us,
-    float synchronization_spacing_us,
-    int total_synchronizations,
-    float signal_burst_us,
-    float signal_spacing_us,
-    int total_signals
+    const float synchronization_burst_us,
+    const float synchronization_spacing_us,
+    const int total_synchronizations,
+    const float signal_burst_us,
+    const float signal_spacing_us,
+    const int total_signals,
+    const float frequency
 ) {
-    struct command_node* new_node = malloc(sizeof(*new_node));
+    struct command_node* const new_node = malloc(sizeof(*new_node));
     new_node->next = NULL;
     new_node->synchronization_burst_us = synchronization_burst_us;
     new_node->synchronization_spacing_us = synchronization_spacing_us;
@@ -593,5 +644,13 @@ struct command_node* allocate_command_node(
     new_node->signal_burst_us = signal_burst_us;
     new_node->signal_spacing_us = signal_spacing_us;
     new_node->total_signals = total_signals;
+    new_node->frequency_control = frequency_to_control(frequency);
+    // RC toys in the 49 MHz range run 49.830 - 49.890, depending on the
+    // channel, so subtract 1 MHz for the dead frequency so that we're still
+    // roughly in the range and hopefully not stomping on anything important.
+    // We don't want to add 1 MHz because the 50 MHz range is reserved for
+    // people with ham radio licenses.
+    new_node->dead_frequency_control = frequency_to_control(frequency - 1.0f);
+    new_node->frequency = frequency;
     return new_node;
 }
