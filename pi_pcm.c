@@ -390,6 +390,7 @@ int main(int argc, char** argv) {
             (struct sockaddr*)&client_address,
             &client_length
         );
+        json_buffer[bytes_count] = '\0';
         if (bytes_count > 0) {
             // Parse JSON
             struct command_t new_command;
