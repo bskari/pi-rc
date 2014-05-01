@@ -61,7 +61,9 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <jansson.h>
 #include <math.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -69,6 +71,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -142,10 +145,6 @@
 
 #define GPFSEL0         (0x00/4)
 
-// The deviation specifies how wide the signal is. Use 25.0 for WBFM
-// (broadcast radio) and about 3.5 for NBFM (walkie-talkie style radio)
-#define DEVIATION       25.0
-
 typedef struct {
     uint32_t info, src, dst, length,
              stride, next, pad[2];
@@ -188,6 +187,7 @@ struct control_data_s {
 #define NUM_PAGES   (int)((sizeof(struct control_data_s) + PAGE_SIZE - 1) >> PAGE_SHIFT)
 
 static struct control_data_s* ctl;
+static int socket_handle = 0;
 
 static void udelay(int us);
 static void terminate(int unused);
@@ -201,6 +201,7 @@ static int fill_buffer(
     const volatile uint32_t* dma_reg_
 );
 static int frequency_to_control(float frequency);
+static int parse_json(const char* json, struct command_t* new_command);
 
 
 int main(int argc, char** argv) {
@@ -353,7 +354,61 @@ int main(int argc, char** argv) {
     }
     struct command_t command = { 2100.0f, 700.0f, 4, 700.0f, 700.0f, 53, frequency, dead_frequency };
 
+    socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_handle < 0) {
+        fatal("Unable to create socket\n");
+    }
+    struct sockaddr_in server_address;
+    struct sockaddr_in client_address;
+    socklen_t client_length = sizeof(client_address);
+    bzero(&client_address, sizeof(client_address));
+    server_address.sin_family = AF_INET;
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    const short port = (argc > 2) ? atoi(argv[2]) : 12345;
+    server_address.sin_port = htons(port);
+    const int bind_status = bind(
+        socket_handle,
+        (struct sockaddr*)&server_address,
+        sizeof(server_address)
+    );
+    if (bind_status < 0) {
+        fatal("Unable to bind socket\n");
+    }
+    const int fcntl_status = fcntl(socket_handle, F_SETFL, O_NONBLOCK);
+    if (fcntl_status < 0) {
+        fatal("Unable to set socket options\n");
+    }
+
+    char json_buffer[1000];
+
     while (1) {
+        const int bytes_count = recvfrom(
+            socket_handle,
+            json_buffer,
+            sizeof(json_buffer) / sizeof(json_buffer[0]),
+            0,
+            (struct sockaddr*)&client_address,
+            &client_length
+        );
+        if (bytes_count > 0) {
+            // Parse JSON
+            struct command_t new_command;
+            const int parse_status = parse_json(json_buffer, &new_command);
+            if (parse_status == 0) {
+                command = new_command;
+                printf(
+                    "Sending %d %4.1f:%4.1f sync bursts, %d %4.1f:%4.1f signal bursts @ %4.3f\n",
+                    command.total_synchronizations,
+                    command.synchronization_burst_us,
+                    command.synchronization_spacing_us,
+                    command.total_signals,
+                    command.signal_burst_us,
+                    command.signal_spacing_us,
+                    command.frequency
+                );
+            }
+        }
+
         // TODO Listen on a socket or something for commands
         fill_buffer(command, ctl, dma_reg);
     }
@@ -379,6 +434,9 @@ static void terminate(const int signal_) {
     if (dma_reg) {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
         udelay(500);
+    }
+    if (socket_handle != 0) {
+        close(socket_handle);
     }
     exit(1);
 }
@@ -558,4 +616,87 @@ static int frequency_to_control(const float frequency) {
     const float poll_per_carrier = PLL_MHZ / frequency;
     const int frequency_control = (int)round(poll_per_carrier * (1 << 12));
     return frequency_control;
+}
+
+
+static int parse_json(const char* json, struct command_t* command) {
+    json_t* root;
+    json_error_t error;
+    root = json_loads(json, 0, &error);
+    if (!root) {
+        fprintf(stderr, "error: on line %d: %s\n", error.line, error.text);
+        return -1;
+    }
+    if (!json_is_object(root)) {
+        fprintf(stderr, "not a JSON array\n");
+        return -1;
+    }
+
+    json_t* data;
+
+    data = json_object_get(root, "synchronization_burst_us");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: synchronization_burst_us\n");
+        return -1;
+    } else {
+        command->synchronization_burst_us = json_number_value(data);
+    }
+
+    data = json_object_get(root, "synchronization_spacing_us");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: synchronization_spacing_us\n");
+        return -1;
+    } else {
+        command->synchronization_spacing_us = json_number_value(data);
+    }
+
+    data = json_object_get(root, "total_synchronizations");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: total_synchronizations\n");
+        return -1;
+    } else {
+        command->total_synchronizations = json_integer_value(data);
+    }
+
+    data = json_object_get(root, "signal_burst_us");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: signal_burst_us\n");
+        return -1;
+    } else {
+        command->signal_burst_us = json_number_value(data);
+    }
+
+    data = json_object_get(root, "signal_spacing_us");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: signal_spacing_us\n");
+        return -1;
+    } else {
+        command->signal_spacing_us = json_number_value(data);
+    }
+
+    data = json_object_get(root, "total_signals");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: total_signals\n");
+        return -1;
+    } else {
+        command->total_signals = json_integer_value(data);
+    }
+
+    data = json_object_get(root, "frequency");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: frequency\n");
+        return -1;
+    } else {
+        command->frequency = json_number_value(data);
+    }
+
+    data = json_object_get(root, "dead_frequency");
+    if (!json_is_number(data)) {
+        fprintf(stderr, "Missing or invalid field: dead_frequency\n");
+        return -1;
+    } else {
+        command->dead_frequency = json_number_value(data);
+    }
+
+    return 0;
 }

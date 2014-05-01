@@ -6,7 +6,7 @@ c_warning_flags = '-Wmissing-prototypes -Wmissing-declarations' \
     ' -Wstrict-prototypes'
 cxx_warning_flags = '-Weffc++'
 other_compiler_flags = '-Werror'
-linker_flags = '-lm'
+linker_flags = '-lm -ljansson'
 
 environment = Environment()
 environment.Append(
