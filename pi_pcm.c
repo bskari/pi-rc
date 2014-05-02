@@ -78,14 +78,12 @@
 #include <time.h>
 #include <unistd.h>
 
-// The .wav file is mono at 22050Hz, which means we have a new sample every
-// 45.4us.  We want to adjust the 100MHz core frequency at 10 times that so as
-// to provide some level of subsampling to improve quality.  The basic idea is
-// to maintain a buffer of 4000 values to write to the clock control register
-// and then arrange for the DMA controller to write the values sequentially at
-// 4.54us intervals.  The control code can then wake up every 10ms or so and
-// populate the buffer with new samples.  At 4.54us per sample, a 4000 sample
-// buffer will last a bit over 18ms, so waking every 10ms should be sufficient.
+// RC commands are almost always sent at some multiple of 5 us.  The basic idea
+// is to maintain a buffer of 4000 values to write to the clock control
+// register and then arrange for the DMA controller to write the values
+// sequentially at 5us intervals.  The control code can then wake up every 10ms
+// or so and populate the buffer with new samples.  At 5us per sample, a 4000
+// sample buffer will last 20ms, so waking every 10ms should be sufficient.
 //
 // Total memory needed is:
 //
@@ -317,9 +315,9 @@ int main(int argc, char** argv) {
     cbp--;
     cbp->next = mem_virt_to_phys(virtbase);
 
-    // Initialise PWM to use a 100MHz clock too, and set the range to
-    // 454 bits, which is 4.54us, the rate at which we want to update
-    // the GPCLK control register.
+    // Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
+    // which is 5us, the rate at which we want to update the GPCLK control
+    // register.
     pwm_reg[PWM_CTL] = 0;
     udelay(10);
     clk_reg[PWMCLK_CNTL] = 0x5A000006;              // Source=PLLD and disable
@@ -328,7 +326,7 @@ int main(int argc, char** argv) {
     udelay(100);
     clk_reg[PWMCLK_CNTL] = 0x5A000016;              // Source=PLLD and enable
     udelay(100);
-    pwm_reg[PWM_RNG1] = 454;
+    pwm_reg[PWM_RNG1] = 500;
     udelay(10);
     pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
     udelay(10);
@@ -539,10 +537,9 @@ int fill_buffer(
         free_slots += NUM_SAMPLES;
     }
 
-    while (free_slots >= 10) {
-        // I have no idea if this subtraction is right
-        // 44,300 is the bit rate of wav files
-        time_us -= 44.300f;
+    for (; free_slots >= 0; --free_slots) {
+        // From DMA settings above, each sample is 5us
+        time_us -= 5.0f;
 
         if (time_us <= 0.0f) {
             switch (state) {
@@ -585,13 +582,6 @@ int fill_buffer(
         }
         assert(time_us > 0.0f && "Time should be positive");
 
-        // In the original FM radio code, dval would be loaded from a wav file.
-        // For the RC car, I don't know what to do.
-        const float dval = 0.0f;
-        const int intval = (int)(floor(dval));
-        const int frac = (int)((dval - (float)intval) * 10.0);
-        int j;
-
         int frequency_control;
         switch (state) {
             case SYNCHRONIZATION_BURST:
@@ -606,16 +596,10 @@ int fill_buffer(
                 assert(0 && "Unknown state when looking for frequency control");
                 frequency_control = frequency_to_control(current_command.frequency);
         }
-        // I'm sure this code could do a better job of subsampling, either by
-        // distributing the '+1's evenly across the 10 subsamples, or maybe
-        // by taking the previous and next samples in to account too.
-        for (j = 0; j < 10; j++) {
-            ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control) + (frac > j ? intval + 1 : intval);
-            if (last_sample == NUM_SAMPLES) {
-                last_sample = 0;
-            }
+        ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control);
+        if (last_sample == NUM_SAMPLES) {
+            last_sample = 0;
         }
-        free_slots -= 10;
     }
     last_cb = (uint32_t)virtbase + last_sample * sizeof(dma_cb_t) * 2;
     return nodes_processed;
