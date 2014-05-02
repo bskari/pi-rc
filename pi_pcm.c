@@ -382,6 +382,7 @@ int main(int argc, char** argv) {
     char json_buffer[1000];
 
     while (1) {
+        // This is nonblocking because we set it as such as above
         const int bytes_count = recvfrom(
             socket_handle,
             json_buffer,
@@ -390,8 +391,14 @@ int main(int argc, char** argv) {
             (struct sockaddr*)&client_address,
             &client_length
         );
-        json_buffer[bytes_count] = '\0';
-        if (bytes_count > 0) {
+        // If the received message is too long, then it will be truncated.  All
+        // valid messages should always fit in the buffer, so just ignore it if
+        // it's too long.
+        if (
+            bytes_count > 0
+            && (size_t)bytes_count < sizeof(json_buffer) / sizeof(json_buffer[0])
+        ) {
+            json_buffer[bytes_count] = '\0';
             // Parse JSON
             struct command_t new_command;
             const int parse_status = parse_json(json_buffer, &new_command);
@@ -410,8 +417,9 @@ int main(int argc, char** argv) {
             }
         }
 
-        // TODO Listen on a socket or something for commands
         fill_buffer(command, ctl, dma_reg);
+
+        usleep(10000);
     }
 
     terminate(0);
@@ -539,32 +547,35 @@ int fill_buffer(
         if (time_us <= 0.0f) {
             switch (state) {
                 case SYNCHRONIZATION_BURST:
-                    time_us = current_command.synchronization_spacing_us;
+                    time_us += current_command.synchronization_spacing_us;
                     state = SYNCHRONIZATION_SPACING;
                     break;
                 case SYNCHRONIZATION_SPACING:
-                    time_us = current_command.synchronization_burst_us;
                     --synchronization_count;
                     if (synchronization_count == 0) {
-                        synchronization_count = current_command.total_synchronizations;
+                        time_us += current_command.signal_burst_us;
                         state = SIGNAL_BURST;
+                        signal_count = current_command.total_signals;
                     } else {
+                        time_us += current_command.synchronization_burst_us;
                         state = SYNCHRONIZATION_BURST;
                     }
                     break;
                 case SIGNAL_BURST:
-                    time_us = current_command.signal_spacing_us;
+                    time_us += current_command.signal_spacing_us;
                     state = SIGNAL_SPACING;
                     break;
                 case SIGNAL_SPACING:
-                    time_us = current_command.signal_burst_us;
                     --signal_count;
                     if (signal_count == 0) {
+                        time_us += current_command.synchronization_burst_us;
+                        state = SYNCHRONIZATION_BURST;
+                        synchronization_count = current_command.total_synchronizations;
                         // Process the next command
                         current_command = command;
                         ++nodes_processed;
-                        state = SYNCHRONIZATION_BURST;
                     } else {
+                        time_us += current_command.signal_burst_us;
                         state = SIGNAL_BURST;
                     }
                     break;
