@@ -36,4 +36,4 @@ pi_pcm_target = environment.Program(
     )
 )
 
-Default(pi_fm_target)
+Default(pi_pcm_target)
