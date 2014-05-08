@@ -7,7 +7,6 @@ import itertools
 import json
 import math
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -18,6 +17,8 @@ import time
 
 
 POPEN = None
+CHANNELS_49_MHZ = (49.830, 49.845, 49.860, 49.875, 49.890)
+CHANNELS_27_MHZ = (26.995, 27.045, 27.095, 27.145, 27.195, 27.255)
 
 def terminate():
     """Terminates the program and any running background processes."""
@@ -91,25 +92,42 @@ def get_process_command_lines():
 
     return command_lines
 
-def next_command(frequency):
-    """Iterates through the commands."""
-    for useconds in xrange(100, 2000, 50):
+def format_command(
+    frequency,
+    useconds,
+    sync_multiplier,
+    sync_repeats,
+    signal_repeats
+):
+    """Returns the JSON command string for this command tuple."""
+    return json.dumps({
+        'synchronization_burst_us': useconds * sync_multiplier,
+        'synchronization_spacing_us': useconds,
+        'total_synchronizations': sync_repeats,
+        'signal_burst_us': useconds,
+        'signal_spacing_us': useconds,
+        'total_signals': signal_repeats,
+        'frequency': frequency,
+        'dead_frequency': 49.890 if frequency < 38 else 26.995,
+    })
+
+
+def command_iterator(frequency):
+    """Iterates through the frequencies and commands."""
+    for useconds in xrange(400, 1200, 100):
         for sync_multiplier in xrange(2, 7):
             for sync_repeats in xrange(2, 7):
-                for signal_repeats in xrange(5, 100):
-                    yield json.dumps({
-                        'synchronization_burst_us': useconds * sync_multiplier,
-                        'synchronization_spacing_us': useconds,
-                        'total_synchronizations': sync_repeats,
-                        'signal_burst_us': useconds,
-                        'signal_spacing_us': useconds,
-                        'total_signals': signal_repeats,
-                        'frequency': frequency,
-                        'dead_frequency': 49.890,
-                    })
+                for signal_repeats in xrange(5, 50):
+                    yield (
+                        frequency,
+                        useconds,
+                        sync_multiplier,
+                        sync_repeats,
+                        signal_repeats,
+                    )
 
 
-def main(host, frequency, port=None, crop_box=None):
+def main(host, port, frequencies, crop_box=None):
     """Iterates through commands and looks for changes in the webcam."""
     if port is None:
         port = 12345
@@ -142,75 +160,62 @@ def main(host, frequency, port=None, crop_box=None):
     base.save('cropped-test.png')
     time.sleep(1)
     print('Filling base photos')
-    for _ in xrange(50):
+    for _ in xrange(10):
         recent = normalize(get_picture(crop_box=crop_box))
         diff = percent_difference(base, recent)
         print('diff = {diff}'.format(diff=diff))
         time.sleep(1)
         diffs.append(diff)
 
+    print('Searching for command codes')
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    saved_images_count = 0
+    for frequency in frequencies:
+        for command_tuple in command_iterator(frequency):
+            command = format_command(*command_tuple)
+            sock.sendto(command + '\n', (host, 12345))
+            time.sleep(1)
 
-    for command in next_command(49.830):
-        sock.sendto(command + '\n', (host, 12345))
-        time.sleep(1)
-
-        recent = normalize(get_picture(crop_box=crop_box))
-        # Let's compare the most recent photo to the oldest one, in case a
-        # cloud passes over and the brightness changes
-        diff = percent_difference(base, recent)
-        std_dev = standard_deviation(diffs)
-        mean_ = mean(diffs)
-        print(
-            'diff = {diff}, std dev = {std_dev}, mean = {mean},'
-            ' var = {variance}'.format(
-                diff=diff,
-                std_dev=std_dev,
-                mean=mean_,
-                variance=((diff - mean_) / std_dev),
-            )
-        )
-        # I should be doing a z-test or something here... eh
-        if (diff - mean_) > (std_dev * 3.0) and diff > 2.0:
-            # Uh, I guess log the time? This should be doing something cooler
-            print(
-                '{diff} at {time}'.format(
-                    diff=diff,
-                    time=str(datetime.datetime.now())
+            recent = normalize(get_picture(crop_box=crop_box))
+            # Let's compare the most recent photo to the oldest one, in case a
+            # cloud passes over and the brightness changes
+            diff = percent_difference(base, recent)
+            std_dev = standard_deviation(diffs)
+            mean_ = mean(diffs)
+            # I should be doing a z-test or something here... eh
+            if abs(diff - mean_) > (std_dev * 3.0) and diff > 5.0:
+                print(
+                    '{diff} at {time}'.format(
+                        diff=diff,
+                        time=str(datetime.datetime.now())
+                    )
                 )
-            )
-            os.rename('photo.png', str(saved_images_count) + '.png')
-            with open('saved.txt', 'a') as saved_file:
-                saved_file.write(
-                    str(saved_images_count) + ': ' + command + '\n'
-                )
-            saved_images_count += 1
-            time.sleep(2)
+                file_name = '-'.join(str(i) for i in command_tuple)
+                os.rename('photo.png', file_name + '.png')
+                time.sleep(2)
 
-        # This is incredibly slow, and should be using a linked list or
-        # something... but it's only happening once a second...
-        diffs.remove(diffs[0])
-        diffs.append(diff)
+            # This is incredibly slow, and should be using a linked list or
+            # something... but it's only happening once a second...
+            diffs.remove(diffs[0])
+            diffs.append(diff)
 
 
 if __name__ == '__main__':
     atexit.register(terminate)
 
-    FRONT_WHEELS_CROP_BOX = (0, 150, 640, 480)
-
     if len(sys.argv) > 1:
-        host = sys.argv[1]
+        HOST = sys.argv[1]
     else:
-        host = '192.168.1.3'
+        HOST = '192.168.1.3'
 
     if len(sys.argv) > 2:
-        port = int(sys.argv[2])
+        PORT = int(sys.argv[2])
     else:
-        port = 12345
+        PORT = 12345
 
     try:
-        main(FRONT_WHEELS_CROP_BOX, host, port)
-    except:
-        terminate()
+        main(HOST, PORT, CHANNELS_49_MHZ)
+    except Exception as exc:
+        print('Caught exception, exiting')
+        print(str(exc))
