@@ -23,7 +23,7 @@ CHANNELS_27_MHZ = (26.995, 27.045, 27.095, 27.145, 27.195, 27.255)
 
 def terminate():
     """Terminates the program and any running background processes."""
-    if POPEN is not None and POPEN.poll() is not None:
+    if POPEN is not None and POPEN.poll() is None:
         print('Killing image capture')
         try:
             POPEN.kill()
