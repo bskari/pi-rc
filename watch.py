@@ -1,6 +1,7 @@
 """Watches the RC car for movement."""
 from PIL import Image
 from PIL import ImageOps
+from collections import deque
 import atexit
 import datetime
 import itertools
@@ -31,10 +32,12 @@ def terminate():
             pass
     sys.exit(0)
 
-def normalize(img):
+def normalize(img, bit_depth=None):
     """Linear normalization and conversion to grayscale of an image."""
     img = ImageOps.grayscale(img)
     img = ImageOps.autocontrast(img)
+    if bit_depth is not None:
+        img = ImageOps.posterize(img, bit_depth)
     return img
 
 def mean(values):
@@ -60,7 +63,6 @@ def get_picture(file_name=None, crop_box=None):
     if crop_box is not None:
         image = image.crop(crop_box)
     return image
-
 
 def percent_difference(image_1, image_2):
     """Returns the percent difference between two images."""
@@ -114,7 +116,7 @@ def format_command(
 
 def command_iterator(frequency):
     """Iterates through the frequencies and commands."""
-    for useconds in xrange(400, 1200, 100):
+    for useconds in xrange(100, 1201, 100):
         for sync_multiplier in xrange(2, 7):
             for sync_repeats in xrange(2, 7):
                 for signal_repeats in xrange(5, 50):
@@ -126,18 +128,8 @@ def command_iterator(frequency):
                         signal_repeats,
                     )
 
-
-def main(host, port, frequencies, crop_box=None):
-    """Iterates through commands and looks for changes in the webcam."""
-    if port is None:
-        port = 12345
-    # Remove the default image, so make sure that we're not processing images
-    # from a previous run
-    try:
-        os.remove('photo.png')
-    except OSError:
-        pass
-
+def start_image_capture_process():
+    """Starts the image capture background process."""
     image_capture_command_parts = [
         '/usr/bin/gst-launch-0.10', '-e',
         'v4l2src',
@@ -155,17 +147,31 @@ def main(host, port, frequencies, crop_box=None):
         POPEN = subprocess.Popen(image_capture_command_parts)
         time.sleep(5)
 
-    diffs = []
-    base = normalize(get_picture(crop_box=crop_box))
-    base.save('cropped-test.png')
+def main(host, port, frequencies, crop_box=None, bit_depth=None):
+    """Iterates through commands and looks for changes in the webcam."""
+    # Remove the default image, so make sure that we're not processing images
+    # from a previous run
+    try:
+        os.remove('photo.png')
+    except OSError:
+        pass
+
+    start_image_capture_process()
+
+    diffs = deque()
+    pictures = deque()
+
+    base = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
+    base.save('normalized-test.png')
     time.sleep(1)
     print('Filling base photos')
-    for _ in xrange(10):
-        recent = normalize(get_picture(crop_box=crop_box))
+    for _ in xrange(20):
+        recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
         diff = percent_difference(base, recent)
         print('diff = {diff}'.format(diff=diff))
         time.sleep(1)
         diffs.append(diff)
+        pictures.append(recent)
 
     print('Searching for command codes')
 
@@ -173,21 +179,23 @@ def main(host, port, frequencies, crop_box=None):
 
     for frequency in frequencies:
         for command_tuple in command_iterator(frequency):
-            command = format_command(*command_tuple)
-            sock.sendto(command + '\n', (host, 12345))
+            sock.sendto(format_command(*command_tuple) + '\n', (host, port))
             time.sleep(1)
 
-            recent = normalize(get_picture(crop_box=crop_box))
+            recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
             # Let's compare the most recent photo to the oldest one, in case a
             # cloud passes over and the brightness changes
-            diff = percent_difference(base, recent)
+            diff = percent_difference(pictures[0], recent)
             std_dev = standard_deviation(diffs)
             mean_ = mean(diffs)
             # I should be doing a z-test or something here... eh
-            if abs(diff - mean_) > (std_dev * 3.0) and diff > 5.0:
+            if abs(diff - mean_) > (std_dev * 3.0) and diff > 2.0:
                 print(
-                    '{diff} at {time}'.format(
+                    'diff={diff}, mean={mean}, std dev={std_dev}'
+                    ' at {time}'.format(
                         diff=diff,
+                        mean=mean_,
+                        std_dev=std_dev,
                         time=str(datetime.datetime.now())
                     )
                 )
@@ -195,10 +203,10 @@ def main(host, port, frequencies, crop_box=None):
                 os.rename('photo.png', file_name + '.png')
                 time.sleep(2)
 
-            # This is incredibly slow, and should be using a linked list or
-            # something... but it's only happening once a second...
-            diffs.remove(diffs[0])
+            diffs.popleft()
             diffs.append(diff)
+            pictures.popleft()
+            pictures.append(recent)
 
 
 if __name__ == '__main__':
@@ -215,7 +223,7 @@ if __name__ == '__main__':
         PORT = 12345
 
     try:
-        main(HOST, PORT, CHANNELS_49_MHZ)
+        main(HOST, PORT, CHANNELS_49_MHZ, bit_depth=1)
     except Exception as exc:
         print('Caught exception, exiting')
         print(str(exc))
