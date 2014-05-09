@@ -8,6 +8,7 @@ photo.png
 *.slo
 *.lo
 *.o
+*.pyc
 
 # Compiled Dynamic libraries
 *.so
