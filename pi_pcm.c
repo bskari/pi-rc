@@ -403,14 +403,15 @@ int main(int argc, char** argv) {
             if (parse_status == 0) {
                 command = new_command;
                 printf(
-                    "Sending %d %4.1f:%4.1f sync bursts, %d %4.1f:%4.1f signal bursts @ %4.3f\n",
+                    "Sending %d %.0f:%.0f sync bursts, %d %.0f:%.0f signal bursts @ %4.3f (%4.3f)\n",
                     command.total_synchronizations,
                     command.synchronization_burst_us,
                     command.synchronization_spacing_us,
                     command.total_signals,
                     command.signal_burst_us,
                     command.signal_spacing_us,
-                    command.frequency
+                    command.frequency,
+                    command.dead_frequency
                 );
             }
         }
