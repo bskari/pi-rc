@@ -1,0 +1,16 @@
+{
+    "name": "Pro Dirt",
+    "frequency": 26.995,
+    "synchronization_burst_us": 1200,
+    "synchronization_spacing_us": 400,
+    "total_synchronizations": 4,
+    "signal_burst_us": 400,
+    "signal_spacing_us": 400,
+
+    "forward": 40,
+    "forward_left": 46,
+    "forward_right": 52,
+    "reverse": 10,
+    "reverse_left": 34,
+    "reverse_right": 28
+}
