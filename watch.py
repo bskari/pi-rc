@@ -21,6 +21,7 @@ POPEN = None
 CHANNELS_49_MHZ = (49.830, 49.845, 49.860, 49.875, 49.890)
 CHANNELS_27_MHZ = (26.995, 27.045, 27.095, 27.145, 27.195, 27.255)
 
+
 def terminate():
     """Terminates the program and any running background processes."""
     if POPEN is not None and POPEN.poll() is None:
@@ -32,6 +33,7 @@ def terminate():
             pass
     sys.exit(0)
 
+
 def normalize(img, bit_depth=None):
     """Linear normalization and conversion to grayscale of an image."""
     img = ImageOps.grayscale(img)
@@ -40,9 +42,11 @@ def normalize(img, bit_depth=None):
         img = ImageOps.posterize(img, bit_depth)
     return img
 
+
 def mean(values):
     """Calculate mean of the values."""
     return sum(values) / len(values)
+
 
 def standard_deviation(values, mean_=None):
     """Calculate standard deviation."""
@@ -54,6 +58,7 @@ def standard_deviation(values, mean_=None):
         sum_ += math.sqrt((value - mean_) ** 2)
     return math.sqrt((1.0 / (size - 1)) * (sum_ / size))
 
+
 def get_picture(file_name=None, crop_box=None):
     """Saves a picture from the webcam."""
     if file_name is None:
@@ -63,6 +68,7 @@ def get_picture(file_name=None, crop_box=None):
     if crop_box is not None:
         image = image.crop(crop_box)
     return image
+
 
 def percent_difference(image_1, image_2):
     """Returns the percent difference between two images."""
@@ -79,6 +85,7 @@ def percent_difference(image_1, image_2):
     ncomponents = image_1.size[0] * image_1.size[1] * 3
     return (diff / 255.0 * 100.0) / ncomponents
 
+
 def get_process_command_lines():
     """Returns all of the command lines of running proceses on the system."""
     pids = [pid for pid in os.listdir('/proc') if pid.isdigit()]
@@ -89,10 +96,11 @@ def get_process_command_lines():
             command_lines.append(
                 open(os.path.join('/proc', pid, 'cmdline'), 'rb').read()
             )
-        except IOError: # proc has already terminated
+        except IOError:  # proc has already terminated
             continue
 
     return command_lines
+
 
 def format_command(
     frequency,
@@ -102,16 +110,23 @@ def format_command(
     signal_repeats
 ):
     """Returns the JSON command string for this command tuple."""
-    return json.dumps({
-        'synchronization_burst_us': useconds * sync_multiplier,
-        'synchronization_spacing_us': useconds,
-        'total_synchronizations': sync_repeats,
-        'signal_burst_us': useconds,
-        'signal_spacing_us': useconds,
-        'total_signals': signal_repeats,
-        'frequency': frequency,
-        'dead_frequency': 49.890 if frequency < 38 else 26.995,
-    })
+    dead_frequency = 49.890 if frequency < 38 else 26.995
+    return json.dumps([
+        {
+            'frequency': frequency,
+            'dead_frequency': dead_frequency,
+            'burst_us': useconds * sync_multiplier,
+            'spacing_us': useconds,
+            'repeats': sync_repeats,
+        },
+        {
+            'frequency': frequency,
+            'dead_frequency': dead_frequency,
+            'burst_us': useconds,
+            'spacing_us': useconds,
+            'repeats': signal_repeats,
+        }
+    ])
 
 
 def command_iterator(frequency):
@@ -127,6 +142,7 @@ def command_iterator(frequency):
                         sync_repeats,
                         signal_repeats,
                     )
+
 
 def start_image_capture_process():
     """Starts the image capture background process."""
@@ -146,6 +162,7 @@ def start_image_capture_process():
         global POPEN
         POPEN = subprocess.Popen(image_capture_command_parts)
         time.sleep(5)
+
 
 def main(host, port, frequencies, crop_box=None, bit_depth=None):
     """Iterates through commands and looks for changes in the webcam."""
@@ -182,7 +199,10 @@ def main(host, port, frequencies, crop_box=None, bit_depth=None):
             sock.sendto(format_command(*command_tuple) + '\n', (host, port))
             time.sleep(1)
 
-            recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
+            recent = normalize(
+                get_picture(crop_box=crop_box),
+                bit_depth=bit_depth
+            )
             # Let's compare the most recent photo to the oldest one, in case a
             # cloud passes over and the brightness changes
             diff = percent_difference(pictures[0], recent)
@@ -223,7 +243,7 @@ if __name__ == '__main__':
         PORT = 12345
 
     try:
-        main(HOST, PORT, CHANNELS_49_MHZ, bit_depth=1)
+        main(HOST, PORT, CHANNELS_27_MHZ, bit_depth=1)
     except Exception as exc:
         print('Caught exception, exiting')
         print(str(exc))

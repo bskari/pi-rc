@@ -3,6 +3,7 @@ import json
 import socket
 import sys
 
+
 def format_command(
     frequency,
     useconds,
@@ -12,37 +13,30 @@ def format_command(
 ):
     """Returns the JSON command string for this command tuple."""
     dead_frequency = 49.890 if frequency < 38 else 26.995
-    return json.dumps({
-        'synchronization_burst_us': useconds * sync_multiplier,
-        'synchronization_spacing_us': useconds,
-        'total_synchronizations': sync_repeats,
-        'signal_burst_us': useconds,
-        'signal_spacing_us': useconds,
-        'total_signals': signal_repeats,
-        'frequency': frequency,
-        'dead_frequency': dead_frequency,
-    })
+    return json.dumps([
+        {
+            'frequency': frequency,
+            'dead_frequency': dead_frequency,
+            'burst_us': useconds * sync_multiplier,
+            'spacing_us': useconds,
+            'repeats': sync_repeats,
+        },
+        {
+            'frequency': frequency,
+            'dead_frequency': dead_frequency,
+            'burst_us': useconds,
+            'spacing_us': useconds,
+            'repeats': signal_repeats,
+        }
+    ])
 
-
-def command_iterator(frequency):
-    """Iterates through the frequencies and commands."""
-    for useconds in xrange(400, 1200, 100):
-        for sync_multiplier in xrange(2, 7):
-            for sync_repeats in xrange(2, 7):
-                for signal_repeats in xrange(5, 50):
-                    yield (
-                        frequency,
-                        useconds,
-                        sync_multiplier,
-                        sync_repeats,
-                        signal_repeats,
-                    )
 
 def input_function(type_cast):
     if sys.version_info.major == 2:
         return lambda message: type_cast(raw_input(message))
     else:
         return lambda message: type_cast(input(message))
+
 
 def get_command_array():
     read_float = input_function(float)
@@ -58,8 +52,9 @@ def get_command_array():
         useconds,
         sync_multiplier,
         sync_repeats,
-        0, # Signal repeats, to be read in and configuread later
+        0,  # Signal repeats, to be read in and configured later
     ]
+
 
 def main(host, port):
     """Reads in and runs command sequences."""
@@ -68,7 +63,6 @@ def main(host, port):
 
     command_array = get_command_array()
 
-    read_float = input_function(float)
     read_int = input_function(int)
 
     while True:

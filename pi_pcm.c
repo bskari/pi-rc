@@ -153,17 +153,14 @@ typedef struct {
     uint32_t physaddr;
 } page_map_t;
 
-struct command_t {
-    // I could specify smaller datatypes for these... but who cares about
-    // saving a few bytes
-    float synchronization_burst_us;
-    float synchronization_spacing_us;
-    int total_synchronizations;
-    float signal_burst_us;
-    float signal_spacing_us;
-    int total_signals;
+struct command_node_t {
+    float burst_us;
+    float spacing_us;
+    int repeats;
     float frequency;
     float dead_frequency;
+
+    struct command_node_t* next;
 };
 
 page_map_t* page_map;
@@ -194,39 +191,35 @@ static uint32_t mem_virt_to_phys(void* virt);
 static uint32_t mem_phys_to_virt(uint32_t phys);
 static void* map_peripheral(uint32_t base, uint32_t len);
 static int fill_buffer(
-    struct command_t command,
+    const struct command_node_t* command,
+    const struct command_node_t* next_command,
     struct control_data_s* ctl_,
     const volatile uint32_t* dma_reg_
 );
 static int frequency_to_control(float frequency);
-static int parse_json(const char* json, struct command_t* new_command);
+static int parse_json(const char* json, struct command_node_t** new_command);
+static void free_command(struct command_node_t* command);
 
 
 int main(int argc, char** argv) {
     int i, mem_fd, pid;
     char pagemap_fn[64];
 
+    struct sigaction sa;
     // Catch all signals possible - it is vital we kill the DMA engine
     // on process exit!
-    for (i = 0; i < 64; i++) {
-        struct sigaction sa;
-
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = terminate;
-        sigaction(i, &sa, NULL);
+    for (i = 1; i < 64; i++) {
+        // These are uncatchable
+        if (i != SIGKILL && i != SIGSTOP) {
+            memset(&sa, 0, sizeof(sa));
+            sa.sa_handler = terminate;
+            sigaction(i, &sa, NULL);
+        }
     }
 
     // Calculate the frequency control word
     // The fractional part is stored in the lower 12 bits
-    float frequency;
-    if (argc > 1) {
-        frequency = atof(argv[1]);
-        if (frequency > 250.0f || frequency < 1.0f) {
-            frequency = 100.0f;
-        }
-    } else {
-        frequency = 100.0f;
-    }
+    float frequency = 49.830;
     printf("Broadcasting at %0.3f\n", frequency);
 
     dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
@@ -344,13 +337,15 @@ int main(int argc, char** argv) {
     dma_reg[DMA_DEBUG] = 7; // clear debug error flags
     dma_reg[DMA_CS] = 0x10880001;   // go, mid priority, wait for outstanding writes
 
-    float dead_frequency;
-    if (frequency > 49.860f) {
-        dead_frequency = 49.830f;
-    } else {
-        dead_frequency = 49.890f;
-    }
-    struct command_t command = { 2100.0f, 700.0f, 4, 700.0f, 700.0f, 53, frequency, dead_frequency };
+    struct command_node_t* command = malloc(sizeof(*command));
+    command->burst_us = 100.0f;
+    command->spacing_us = 100.0f;
+    command->repeats = 1;
+    command->frequency = frequency;
+    command->dead_frequency = frequency;
+    command->next = NULL;
+
+    struct command_node_t* new_command = NULL;
 
     socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_handle < 0) {
@@ -397,26 +392,42 @@ int main(int argc, char** argv) {
             && (size_t)bytes_count < sizeof(json_buffer) / sizeof(json_buffer[0])
         ) {
             json_buffer[bytes_count] = '\0';
-            // Parse JSON
-            struct command_t new_command;
-            const int parse_status = parse_json(json_buffer, &new_command);
+            struct command_node_t* parsed_command = NULL;
+            const int parse_status = parse_json(json_buffer, &parsed_command);
             if (parse_status == 0) {
-                command = new_command;
-                printf(
-                    "Sending %d %.0f:%.0f sync bursts, %d %.0f:%.0f signal bursts @ %4.3f (%4.3f)\n",
-                    command.total_synchronizations,
-                    command.synchronization_burst_us,
-                    command.synchronization_spacing_us,
-                    command.total_signals,
-                    command.signal_burst_us,
-                    command.signal_spacing_us,
-                    command.frequency,
-                    command.dead_frequency
-                );
+                // Command bursts come after synchronization bursts, and
+                // they're the interesting part, so print those
+                if (parsed_command->next != NULL) {
+                    printf(
+                        "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
+                        parsed_command->next->repeats,
+                        parsed_command->next->burst_us,
+                        parsed_command->next->spacing_us,
+                        parsed_command->next->frequency,
+                        parsed_command->next->dead_frequency
+                    );
+                }
+
+                if (new_command == NULL) {
+                    new_command = parsed_command;
+                } else {
+                    free_command(command);
+                    command = new_command;
+                    new_command = parsed_command;
+                }
+            } else {
+                free_command(parsed_command);
             }
         }
 
-        fill_buffer(command, ctl, dma_reg);
+        const int used = fill_buffer(command, new_command, ctl, dma_reg);
+        if (used > 0) {
+            if (new_command != NULL) {
+                free_command(command);
+                command = new_command;
+                new_command = NULL;
+            }
+        }
 
         usleep(10000);
     }
@@ -501,27 +512,25 @@ static void* map_peripheral(uint32_t base, uint32_t len) {
 
 
 int fill_buffer(
-    const struct command_t command,
-    struct control_data_s* ctl_,
+    const struct command_node_t* const command,
+    const struct command_node_t* const next_command,
+    struct control_data_s* const ctl_,
     const volatile uint32_t* const dma_reg_
 ) {
+    assert(command != NULL || next_command != NULL);
     int nodes_processed = 0;
 
     static enum {
-        SYNCHRONIZATION_BURST,
-        SYNCHRONIZATION_SPACING,
-        SIGNAL_BURST,
-        SIGNAL_SPACING
-    } state = SYNCHRONIZATION_BURST;
+        BURST,
+        SPACING,
+    } state = BURST;
 
     static float time_us = 0.0f;
 
-    static int synchronization_count = -1;
-    static int signal_count = -1;
-    static struct command_t current_command;
-    if (synchronization_count == -1) {
-        synchronization_count = command.total_synchronizations;
-        signal_count = command.total_signals;
+    static int repeat_count = -1;
+    static const struct command_node_t* current_command;
+    if (repeat_count == -1) {
+        repeat_count = command->repeats;
         current_command = command;
     }
 
@@ -544,37 +553,28 @@ int fill_buffer(
 
         if (time_us <= 0.0f) {
             switch (state) {
-                case SYNCHRONIZATION_BURST:
-                    time_us += current_command.synchronization_spacing_us;
-                    state = SYNCHRONIZATION_SPACING;
+                case BURST:
+                    time_us += current_command->spacing_us;
+                    state = SPACING;
                     break;
-                case SYNCHRONIZATION_SPACING:
-                    --synchronization_count;
-                    if (synchronization_count == 0) {
-                        time_us += current_command.signal_burst_us;
-                        state = SIGNAL_BURST;
-                        signal_count = current_command.total_signals;
+                case SPACING:
+                    --repeat_count;
+                    if (repeat_count == 0) {
+                        current_command = current_command->next;
+                        if (current_command == NULL) {
+                            if (next_command != NULL) {
+                                current_command = next_command;
+                            } else {
+                                current_command = command;
+                            }
+                            ++nodes_processed;
+                        }
+                        time_us += current_command->burst_us;
+                        state = BURST;
+                        repeat_count = current_command->repeats;
                     } else {
-                        time_us += current_command.synchronization_burst_us;
-                        state = SYNCHRONIZATION_BURST;
-                    }
-                    break;
-                case SIGNAL_BURST:
-                    time_us += current_command.signal_spacing_us;
-                    state = SIGNAL_SPACING;
-                    break;
-                case SIGNAL_SPACING:
-                    --signal_count;
-                    if (signal_count == 0) {
-                        time_us += current_command.synchronization_burst_us;
-                        state = SYNCHRONIZATION_BURST;
-                        synchronization_count = current_command.total_synchronizations;
-                        // Process the next command
-                        current_command = command;
-                        ++nodes_processed;
-                    } else {
-                        time_us += current_command.signal_burst_us;
-                        state = SIGNAL_BURST;
+                        time_us += current_command->burst_us;
+                        state = BURST;
                     }
                     break;
                 default:
@@ -585,17 +585,15 @@ int fill_buffer(
 
         int frequency_control;
         switch (state) {
-            case SYNCHRONIZATION_BURST:
-            case SIGNAL_BURST:
-                frequency_control = frequency_to_control(current_command.frequency);
+            case BURST:
+                frequency_control = frequency_to_control(current_command->frequency);
                 break;
-            case SYNCHRONIZATION_SPACING:
-            case SIGNAL_SPACING:
-                frequency_control = frequency_to_control(current_command.dead_frequency);
+            case SPACING:
+                frequency_control = frequency_to_control(current_command->dead_frequency);
                 break;
             default:
                 assert(0 && "Unknown state when looking for frequency control");
-                frequency_control = frequency_to_control(current_command.frequency);
+                frequency_control = frequency_to_control(current_command->frequency);
         }
         ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control);
         if (last_sample == NUM_SAMPLES) {
@@ -616,84 +614,118 @@ static int frequency_to_control(const float frequency) {
 }
 
 
-static int parse_json(const char* json, struct command_t* command) {
-    json_t* root;
+static int parse_json(const char* const json, struct command_node_t** command) {
+    json_t* root = NULL;
+    json_t* object = NULL;
+    json_t* data = NULL;
     json_error_t error;
+    int return_value = -1;
+
+    assert(*command == NULL);
+
     root = json_loads(json, 0, &error);
     if (!root) {
         fprintf(stderr, "error: on line %d: %s\n", error.line, error.text);
-        return -1;
+        goto CLEANUP;
     }
-    if (!json_is_object(root)) {
+    if (!json_is_array(root)) {
         fprintf(stderr, "not a JSON array\n");
-        return -1;
+        goto CLEANUP;
     }
 
-    json_t* data;
+    size_t array_index;
+    const size_t array_size = json_array_size(root);
+    for (array_index = 0; array_index < array_size; ++array_index) {
+        object = json_array_get(root, array_index);
+        if (!json_is_object(object)) {
+            fprintf(
+                stderr,
+                "Item %d in array is not an object\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
 
-    data = json_object_get(root, "synchronization_burst_us");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: synchronization_burst_us\n");
-        return -1;
-    } else {
-        command->synchronization_burst_us = json_number_value(data);
+        *command = malloc(sizeof(**command));
+        (*command)->next = NULL;
+
+        data = json_object_get(object, "burst_us");
+        if (json_is_number(data)) {
+            (*command)->burst_us = json_number_value(data);
+        } else {
+            fprintf(
+                stderr,
+                "In item %d: missing or invalid field: burst_us\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
+
+        data = json_object_get(object, "spacing_us");
+        if (json_is_number(data)) {
+            (*command)->spacing_us = json_number_value(data);
+        } else {
+            fprintf(
+                stderr,
+                "In item %d: missing or invalid field: spacing_us\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
+
+        data = json_object_get(object, "repeats");
+        if (json_is_number(data)) {
+            (*command)->repeats = json_number_value(data);
+        } else {
+            fprintf(
+                stderr,
+                "In item %d: missing or invalid field: repeats\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
+
+        data = json_object_get(object, "frequency");
+        if (json_is_number(data)) {
+            (*command)->frequency = json_number_value(data);
+        } else {
+            fprintf(
+                stderr,
+                "In item %d: missing or invalid field: frequency\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
+
+        data = json_object_get(object, "dead_frequency");
+        if (json_is_number(data)) {
+            (*command)->dead_frequency = json_number_value(data);
+        } else {
+            fprintf(
+                stderr,
+                "In item %d: missing or invalid field: dead_frequency\n",
+                array_index + 1
+            );
+            goto CLEANUP;
+        }
+
+        command = &((*command)->next);
     }
 
-    data = json_object_get(root, "synchronization_spacing_us");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: synchronization_spacing_us\n");
-        return -1;
-    } else {
-        command->synchronization_spacing_us = json_number_value(data);
-    }
+    return_value = 0;
 
-    data = json_object_get(root, "total_synchronizations");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: total_synchronizations\n");
-        return -1;
-    } else {
-        command->total_synchronizations = json_integer_value(data);
+CLEANUP:
+    if (root != NULL) {
+        json_decref(root);
     }
+    return return_value;
+}
 
-    data = json_object_get(root, "signal_burst_us");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: signal_burst_us\n");
-        return -1;
-    } else {
-        command->signal_burst_us = json_number_value(data);
+
+static void free_command(struct command_node_t* command) {
+    while (command) {
+        struct command_node_t* const previous = command;
+        command = command->next;
+        free(previous);
     }
-
-    data = json_object_get(root, "signal_spacing_us");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: signal_spacing_us\n");
-        return -1;
-    } else {
-        command->signal_spacing_us = json_number_value(data);
-    }
-
-    data = json_object_get(root, "total_signals");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: total_signals\n");
-        return -1;
-    } else {
-        command->total_signals = json_integer_value(data);
-    }
-
-    data = json_object_get(root, "frequency");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: frequency\n");
-        return -1;
-    } else {
-        command->frequency = json_number_value(data);
-    }
-
-    data = json_object_get(root, "dead_frequency");
-    if (!json_is_number(data)) {
-        fprintf(stderr, "Missing or invalid field: dead_frequency\n");
-        return -1;
-    } else {
-        command->dead_frequency = json_number_value(data);
-    }
-
-    return 0;
 }

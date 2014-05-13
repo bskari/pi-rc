@@ -6,25 +6,28 @@ import socket
 import sys
 
 UP = LEFT = DOWN = RIGHT = False
+QUIT = False
 
 
 def load_configuration(configuration_file):
     """Generates a dict of JSON command messages for each movement."""
     configuration = json.loads(configuration_file.read())
-    base_command = {}
-    for key in (
-        'frequency',
-        'synchronization_burst_us',
-        'synchronization_spacing_us',
-        'total_synchronizations',
-        'signal_burst_us',
-        'signal_spacing_us',
-    ):
-        base_command[key] = configuration[key]
     dead_frequency = 49.890 if configuration['frequency'] < 38 else 26.995
-    base_command['dead_frequency'] = dead_frequency
+    sync_command = {
+        'frequency': configuration['frequency'],
+        'dead_frequency': dead_frequency,
+        'burst_us': configuration['synchronization_burst_us'],
+        'spacing_us': configuration['synchronization_spacing_us'],
+        'repeats': configuration['total_synchronizations'],
+    }
+    base_command = {
+        'frequency': configuration['frequency'],
+        'dead_frequency': dead_frequency,
+        'burst_us': configuration['signal_burst_us'],
+        'spacing_us': configuration['signal_spacing_us'],
+    }
 
-    direct_commands = {}
+    movement_to_command = {}
     for key in (
         'forward',
         'forward_left',
@@ -34,16 +37,22 @@ def load_configuration(configuration_file):
         'reverse_right',
     ):
         command_dict = base_command.copy()
-        command_dict['total_signals'] = configuration[key]
-        direct_commands[key] = json.dumps(command_dict)
+        command_dict['repeats'] = configuration[key]
+        movement_to_command[key] = command_dict
 
     # We also need to add an idle command; just broadcast at the dead frequency
     command_dict = base_command.copy()
     command_dict['frequency'] = dead_frequency
-    command_dict['total_signals'] = 20 # Doesn't matter
-    direct_commands['idle'] = json.dumps(command_dict)
+    command_dict['repeats'] = 20  # Doesn't matter
+    movement_to_command['idle'] = command_dict
+
+    direct_commands = {
+        key: json.dumps([sync_command, movement_to_command[key]])
+        for key in movement_to_command
+    }
 
     return direct_commands
+
 
 def get_keys():
     """Returns a tuple of (UP, DOWN, LEFT, RIGHT, changed) representing which
@@ -53,13 +62,15 @@ def get_keys():
     global DOWN
     global LEFT
     global RIGHT
+    global QUIT
     change = False
+    listen_keys = (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN)
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            pygame.quit()
+            QUIT = True
 
         elif event.type == pygame.KEYDOWN:
-            change = True
+            change = (event.key in listen_keys)
             if event.key == pygame.K_LEFT:
                 LEFT = True
             elif event.key == pygame.K_RIGHT:
@@ -68,9 +79,11 @@ def get_keys():
                 UP = True
             elif event.key == pygame.K_DOWN:
                 DOWN = True
+            elif event.key == pygame.K_ESCAPE:
+                QUIT = True
 
         elif event.type == pygame.KEYUP:
-            change = True
+            change = (event.key in listen_keys)
             if event.key == pygame.K_LEFT:
                 LEFT = False
             elif event.key == pygame.K_RIGHT:
@@ -81,6 +94,7 @@ def get_keys():
                 DOWN = False
 
     return (UP, DOWN, LEFT, RIGHT, change)
+
 
 def main(host, port, configuration_file_name):
     """Runs the interactive control."""
@@ -95,12 +109,18 @@ def main(host, port, configuration_file_name):
 
     pygame.display.set_caption('rc-pi interactive')
 
+    text = font.render('Press a key to move', 1, white)
+    text_position = text.get_rect(centerx=size[0] / 2)
+    background.blit(text, text_position)
+    screen.blit(background, (0, 0))
+    pygame.display.flip()
+
     with open(configuration_file_name) as configuration_file:
         configuration = load_configuration(configuration_file)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    while True:
+    while not QUIT:
         up, down, left, right, change = get_keys()
 
         if change:
@@ -126,9 +146,9 @@ def main(host, port, configuration_file_name):
             text_position = text.get_rect(centerx=size[0] / 2)
             background.blit(text, text_position)
             screen.blit(background, (0, 0))
-            print(configuration[command])
-
             pygame.display.flip()
+
+            print(configuration[command])
 
         # Limit to 20 frames per second
         clock.tick(60)
