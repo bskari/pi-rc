@@ -5,13 +5,15 @@ from collections import deque
 import argparse
 import atexit
 import datetime
-import json
 import math
 import os
 import socket
 import subprocess
 import sys
 import time
+
+from common import format_command
+from common import server_up
 
 # pylint: disable=superfluous-parens
 # pylint: disable=global-statement
@@ -107,33 +109,6 @@ def get_process_command_lines():
     return command_lines
 
 
-def format_command(
-    frequency,
-    useconds,
-    sync_multiplier,
-    sync_repeats,
-    signal_repeats
-):
-    """Returns the JSON command string for this command tuple."""
-    dead_frequency = 49.890 if frequency < 38 else 26.995
-    return json.dumps([
-        {
-            'frequency': frequency,
-            'dead_frequency': dead_frequency,
-            'burst_us': useconds * sync_multiplier,
-            'spacing_us': useconds,
-            'repeats': sync_repeats,
-        },
-        {
-            'frequency': frequency,
-            'dead_frequency': dead_frequency,
-            'burst_us': useconds,
-            'spacing_us': useconds,
-            'repeats': signal_repeats,
-        }
-    ])
-
-
 def command_iterator(frequency):
     """Iterates through the frequencies and commands."""
     for useconds in range(100, 1201, 100):
@@ -167,42 +142,6 @@ def start_image_capture_process():
         global POPEN
         POPEN = subprocess.Popen(image_capture_command_parts)
         time.sleep(5)
-
-
-def dead_frequency(frequency):
-    """Returns an approprtiate dead signal frequency for the given signal."""
-    if frequency < 38:
-        return 49.890
-    return 26.995
-
-
-def server_up(host, port, frequency):
-    """Checks that the server is up and listening to commands."""
-    # Send a test command to make sure that the server is listening
-    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    listen_socket.bind(('', port + 1))
-    listen_socket.settimeout(1.0)
-    send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    dead = dead_frequency(frequency)
-    command = json.dumps([{
-        'frequency': dead,
-        'dead_frequency': dead,
-        'burst_us': 100,
-        'spacing_us': 100,
-        'repeats': 10,
-        'request_response': True,  # This forces the server to respond
-    }])
-    response_received = False
-    for _ in range(3):
-        send_socket.sendto(command, (host, port))
-        try:
-            listen_socket.recv(1024)
-            response_received = True
-            break
-        except socket.timeout:
-            pass
-
-    return response_received
 
 
 def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=None):
