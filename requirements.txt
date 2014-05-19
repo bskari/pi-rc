@@ -1,0 +1,2 @@
+pillow>=2.3
+RPi.GPIO>=0.5

@@ -2,9 +2,9 @@
 from PIL import Image
 from PIL import ImageOps
 from collections import deque
+import argparse
 import atexit
 import datetime
-import itertools
 import json
 import math
 import os
@@ -31,7 +31,12 @@ def terminate():
             time.sleep(1)
         except OSError:
             pass
-    sys.exit(0)
+
+    try:
+        os.remove('photo.png')
+    except OSError:
+        pass
+
 
 
 def normalize(img, bit_depth=None):
@@ -75,7 +80,7 @@ def percent_difference(image_1, image_2):
     assert image_1.mode == image_2.mode, 'Different kinds of images.'
     assert image_1.size == image_2.size, 'Different sizes.'
 
-    pairs = itertools.izip(image_1.getdata(), image_2.getdata())
+    pairs = zip(image_1.getdata(), image_2.getdata())
     if len(image_1.getbands()) == 1:
         # for gray-scale jpegs
         diff = sum(abs(p1 - p2) for p1, p2 in pairs)
@@ -131,10 +136,10 @@ def format_command(
 
 def command_iterator(frequency):
     """Iterates through the frequencies and commands."""
-    for useconds in xrange(100, 1201, 100):
-        for sync_multiplier in xrange(2, 7):
-            for sync_repeats in xrange(2, 7):
-                for signal_repeats in xrange(5, 50):
+    for useconds in range(100, 1201, 100):
+        for sync_multiplier in range(2, 7):
+            for sync_repeats in range(2, 7):
+                for signal_repeats in range(5, 50):
                     yield (
                         frequency,
                         useconds,
@@ -164,39 +169,36 @@ def start_image_capture_process():
         time.sleep(5)
 
 
-def main(host, port, frequencies, crop_box=None, bit_depth=None):
+def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=None):
     """Iterates through commands and looks for changes in the webcam."""
-    # Remove the default image, so make sure that we're not processing images
-    # from a previous run
-    try:
-        os.remove('photo.png')
-    except OSError:
-        pass
-
-    start_image_capture_process()
-
     diffs = deque()
     pictures = deque()
 
     base = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
     base.save('normalized-test.png')
     time.sleep(1)
-    print('Filling base photos')
-    for _ in xrange(20):
+    print('Filling base photos for difference analysis')
+    for _ in range(20):
         recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
         diff = percent_difference(base, recent)
-        print('diff = {diff}'.format(diff=diff))
         time.sleep(1)
         diffs.append(diff)
         pictures.append(recent)
 
-    print('Searching for command codes')
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+    print(
+        'Searching for command codes on {frequencies}'.format(
+            frequencies=', '.join((str(f) for f in frequencies))
+        )
+    )
     for frequency in frequencies:
         for command_tuple in command_iterator(frequency):
-            sock.sendto(format_command(*command_tuple) + '\n', (host, port))
+            # pylint: disable=star-args
+            command = format_command(*command_tuple)
+            if sys.version_info.major == 3:
+                command = bytes(command, 'utf-8')
+            sock.sendto(command, (host, port))
             time.sleep(1)
 
             recent = normalize(
@@ -210,6 +212,7 @@ def main(host, port, frequencies, crop_box=None, bit_depth=None):
             mean_ = mean(diffs)
             # I should be doing a z-test or something here... eh
             if abs(diff - mean_) > (std_dev * 3.0) and diff > 2.0:
+                print('Found substantially different photo, saving...')
                 print(
                     'diff={diff}, mean={mean}, std dev={std_dev}'
                     ' at {time}'.format(
@@ -229,21 +232,99 @@ def main(host, port, frequencies, crop_box=None, bit_depth=None):
             pictures.append(recent)
 
 
-if __name__ == '__main__':
+def make_parser():
+    """Builds and returns an argument parser."""
+    parser = argparse.ArgumentParser(
+        description='Iterates through and broadcasts command codes and'
+            ' monitors the webcam to watch for movement from the RC car.'
+    )
+
+    parser.add_argument(
+        '-p',
+        '--port',
+        dest='port',
+        help='The port to send control commands to.',
+        default=12345,
+        type=int
+    )
+    parser.add_argument(
+        '-s',
+        '--server',
+        dest='server',
+        help='The server to send control commands to.',
+        default='127.1'
+    )
+
+    parser.add_argument(
+        '-f',
+        '--frequency',
+        dest='frequency',
+        help='The frequency to broadcast commands on.',
+        default=49,
+        type=float
+    )
+
+    def bit_depth_checker(bit_depth):
+        """Checks that the bit depth argument is valid."""
+        try:
+            bit_depth = int(bit_depth)
+        except:
+            raise argparse.ArgumentTypeError('Bit depth must be an int')
+
+        if not 1 <= bit_depth <= 8:
+            raise argparse.ArgumentTypeError(
+                'Bit depth must be between 1 and 8 inclusive'
+            )
+
+        return bit_depth
+
+    parser.add_argument(
+        '-b',
+        '--bit-depth',
+        dest='bit_depth',
+        help='The bit depth to reduce images to.',
+        type=bit_depth_checker,
+        default=1
+    )
+
+    return parser
+
+
+def main():
+    """Parses command line arguments and runs the interactive controller."""
+    parser = make_parser()
+    args = parser.parse_args()
+
     atexit.register(terminate)
 
-    if len(sys.argv) > 1:
-        HOST = sys.argv[1]
-    else:
-        HOST = '192.168.1.3'
-
-    if len(sys.argv) > 2:
-        PORT = int(sys.argv[2])
-    else:
-        PORT = 12345
-
+    # Remove the default image to make sure that we're not processing images
+    # from a previous run
     try:
-        main(HOST, PORT, CHANNELS_27_MHZ, bit_depth=1)
+        os.remove('photo.png')
+    except OSError:
+        pass
+
+    start_image_capture_process()
+
+    # RC cars in the 27 and 49 MHz spectrum typically operate on one of a
+    # several channels in that frequency, but most toy RC cars that I've
+    # seen only list the major frequency on the car itself. If someone
+    # enters a major frequency, search each channel.
+    if args.frequency == 49:
+        frequencies = CHANNELS_49_MHZ
+    elif args.frequency == 27:
+        frequencies = CHANNELS_27_MHZ
+    else:
+        frequencies = [args.frequency]
+
+    print('Sending commands to ' + args.server + ':' + str(args.port))
+    try:
+        search_for_command_codes(args.server, args.port, frequencies)
+    # pylint: disable=broad-except
     except Exception as exc:
         print('Caught exception, exiting')
         print(str(exc))
+
+
+if __name__ == '__main__':
+    main()
