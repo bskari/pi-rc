@@ -169,6 +169,42 @@ def start_image_capture_process():
         time.sleep(5)
 
 
+def dead_frequency(frequency):
+    """Returns an approprtiate dead signal frequency for the given signal."""
+    if frequency < 38:
+        return 49.890
+    return 26.995
+
+
+def server_up(host, port, frequency):
+    """Checks that the server is up and listening to commands."""
+    # Send a test command to make sure that the server is listening
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listen_socket.bind(('', port + 1))
+    listen_socket.settimeout(1.0)
+    send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    dead = dead_frequency(frequency)
+    command = json.dumps([{
+        'frequency': dead,
+        'dead_frequency': dead,
+        'burst_us': 100,
+        'spacing_us': 100,
+        'repeats': 10,
+        'request_response': True,  # This forces the server to respond
+    }])
+    response_received = False
+    for _ in range(3):
+        send_socket.sendto(command, (host, port))
+        try:
+            listen_socket.recv(1024)
+            response_received = True
+            break
+        except socket.timeout:
+            pass
+
+    return response_received
+
+
 def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=None):
     """Iterates through commands and looks for changes in the webcam."""
     diffs = deque()
@@ -303,6 +339,10 @@ def main():
         os.remove('photo.png')
     except OSError:
         pass
+
+    if not server_up(args.server, args.port, args.frequency):
+        print('Server does not appear to be listening for messages, aborting')
+        return
 
     start_image_capture_process()
 

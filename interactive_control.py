@@ -14,20 +14,27 @@ UP = LEFT = DOWN = RIGHT = False
 QUIT = False
 
 
+def dead_frequency(frequency):
+    """Returns an approprtiate dead signal frequency for the given signal."""
+    if frequency < 38:
+        return 49.890
+    return 26.995
+
+
 def load_configuration(configuration_file):
     """Generates a dict of JSON command messages for each movement."""
     configuration = json.loads(configuration_file.read())
-    dead_frequency = 49.890 if configuration['frequency'] < 38 else 26.995
+    dead = dead_frequency(configuration['frequency'])
     sync_command = {
         'frequency': configuration['frequency'],
-        'dead_frequency': dead_frequency,
+        'dead_frequency': dead,
         'burst_us': configuration['synchronization_burst_us'],
         'spacing_us': configuration['synchronization_spacing_us'],
         'repeats': configuration['total_synchronizations'],
     }
     base_command = {
         'frequency': configuration['frequency'],
-        'dead_frequency': dead_frequency,
+        'dead_frequency': dead,
         'burst_us': configuration['signal_burst_us'],
         'spacing_us': configuration['signal_spacing_us'],
     }
@@ -52,7 +59,7 @@ def load_configuration(configuration_file):
 
     # We also need to add an idle command; just broadcast at the dead frequency
     command_dict = [base_command.copy()]
-    command_dict[0]['frequency'] = dead_frequency
+    command_dict[0]['frequency'] = dead
     command_dict[0]['repeats'] = 20  # Doesn't matter
     direct_commands['idle'] = json.dumps(command_dict)
 
@@ -86,7 +93,7 @@ def get_keys():
     return (UP, DOWN, LEFT, RIGHT, change)
 
 
-def interactive_control(host, port, configuration_file_name):
+def interactive_control(host, port, configuration):
     """Runs the interactive control."""
     pygame.init()
     size = (300, 400)
@@ -106,9 +113,6 @@ def interactive_control(host, port, configuration_file_name):
     background.blit(text, text_position)
     screen.blit(background, (0, 0))
     pygame.display.flip()
-
-    with open(configuration_file_name) as configuration_file:
-        configuration = load_configuration(configuration_file)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -181,13 +185,50 @@ def make_parser():
     return parser
 
 
+def server_up(host, port, frequency):
+    """Checks that the server is up and listening to commands."""
+    # Send a test command to make sure that the server is listening
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listen_socket.bind(('', port + 1))
+    listen_socket.settimeout(1.0)
+    send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    command = json.dumps([{
+        'frequency': dead_frequency(frequency),
+        'dead_frequency': dead_frequency(frequency),
+        'burst_us': 100,
+        'spacing_us': 100,
+        'repeats': 10,
+        'request_response': True,  # This forces the server to respond
+    }])
+    response_received = False
+    for _ in range(3):
+        send_socket.sendto(command, (host, port))
+        try:
+            listen_socket.recv(1024)
+            response_received = True
+            break
+        except socket.timeout:
+            pass
+
+    return response_received
+
+
 def main():
     """Parses command line arguments and runs the interactive controller."""
     parser = make_parser()
     args = parser.parse_args()
+
+    with open(args.control_file) as configuration_file:
+        configuration = load_configuration(configuration_file)
+
     print('Sending commands to ' + args.server + ':' + str(args.port))
 
-    interactive_control(args.server, args.port, args.control_file)
+    frequency = json.loads(configuration['idle'])[0]['frequency']
+    if not server_up(args.server, args.port, frequency):
+        print('Server does not appear to be listening for messages, aborting')
+        return
+
+    interactive_control(args.server, args.port, configuration)
 
 if __name__ == '__main__':
     main()

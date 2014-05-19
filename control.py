@@ -15,18 +15,18 @@ def format_command(
     signal_repeats
 ):
     """Returns the JSON command string for this command tuple."""
-    dead_frequency = 49.890 if frequency < 38 else 26.995
+    dead = dead_frequency(frequency)
     return json.dumps([
         {
             'frequency': frequency,
-            'dead_frequency': dead_frequency,
+            'dead_frequency': dead,
             'burst_us': useconds * sync_multiplier,
             'spacing_us': useconds,
             'repeats': sync_repeats,
         },
         {
             'frequency': frequency,
-            'dead_frequency': dead_frequency,
+            'dead_frequency': dead,
             'burst_us': useconds,
             'spacing_us': useconds,
             'repeats': signal_repeats,
@@ -104,11 +104,6 @@ def make_parser():
         help='The frequency to broadcast commands on.'
     )
     parser.add_argument(
-        '--dead-frequency',
-        dest='dead_frequency',
-        help='The dead frequency to broadcast signal spacing on.'
-    )
-    parser.add_argument(
         '-u',
         '--microseconds',
         dest='microseconds',
@@ -149,11 +144,52 @@ def send_signal_repeats(host, port, command_array):
         sock.sendto(command, (host, port))
 
 
+def dead_frequency(frequency):
+    """Returns an approprtiate dead signal frequency for the given signal."""
+    if frequency < 38:
+        return 49.890
+    return 26.995
+
+
+def server_up(host, port, frequency):
+    """Checks that the server is up and listening to commands."""
+    # Send a test command to make sure that the server is listening
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listen_socket.bind(('', port + 1))
+    listen_socket.settimeout(1.0)
+    send_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    command = json.dumps([{
+        'frequency': dead_frequency(frequency),
+        'dead_frequency': dead_frequency(frequency),
+        'burst_us': 100,
+        'spacing_us': 100,
+        'repeats': 10,
+        'request_response': True,  # This forces the server to respond
+    }])
+    response_received = False
+    for _ in range(3):
+        send_socket.sendto(command, (host, port))
+        try:
+            listen_socket.recv(1024)
+            response_received = True
+            break
+        except socket.timeout:
+            pass
+
+    return response_received
+
+
 def main():
     """Parses command line arguments and runs the simple controller."""
     parser = make_parser()
-    command_array = get_command_array(parser)
     args = parser.parse_args()
+
+    if not server_up(args.server, args.port, dead_frequency(args.frequency)):
+        print('Server does not appear to be listening for messages, aborting')
+        return
+
+    command_array = get_command_array(parser)
+
     print('Sending commands to ' + args.server + ':' + str(args.port))
     send_signal_repeats(args.server, args.port, command_array)
 

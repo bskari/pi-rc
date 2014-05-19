@@ -197,7 +197,11 @@ static int fill_buffer(
     const volatile uint32_t* dma_reg_
 );
 static int frequency_to_control(float frequency);
-static int parse_json(const char* json, struct command_node_t** new_command);
+static int parse_json(
+    const char* json,
+    struct command_node_t** new_command,
+    int* request_response
+);
 static void free_command(struct command_node_t* command);
 
 
@@ -393,20 +397,49 @@ int main(int argc, char** argv) {
         ) {
             json_buffer[bytes_count] = '\0';
             struct command_node_t* parsed_command = NULL;
-            const int parse_status = parse_json(json_buffer, &parsed_command);
+            int request_response = 0;
+            const int parse_status = parse_json(
+                json_buffer,
+                &parsed_command,
+                &request_response
+            );
+
+            if (request_response) {
+                const int length = snprintf(
+                    json_buffer,
+                    sizeof(json_buffer) / sizeof(json_buffer[0]),
+                    "{\"time\": %d}",
+                    (int)time(NULL)
+                );
+                // The client should be listening for responses on the port one
+                // above the port that it sent to us
+                client_address.sin_port = htons(ntohs(server_address.sin_port) + 1);
+                sendto(
+                    socket_handle,
+                    json_buffer,
+                    length,
+                    0,
+                    (struct sockaddr*)&client_address,
+                    client_length
+                );
+            }
+
             if (parse_status == 0) {
                 // Command bursts come after synchronization bursts, and
                 // they're the interesting part, so print those
-                if (parsed_command->next != NULL) {
-                    printf(
-                        "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
-                        parsed_command->next->repeats,
-                        parsed_command->next->burst_us,
-                        parsed_command->next->spacing_us,
-                        parsed_command->next->frequency,
-                        parsed_command->next->dead_frequency
-                    );
-                }
+                const  struct command_node_t* const print_command = (
+                    parsed_command->next == NULL
+                    ? parsed_command
+                    : parsed_command->next
+                );
+                printf(
+                    "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
+                    print_command->repeats,
+                    print_command->burst_us,
+                    print_command->spacing_us,
+                    print_command->frequency,
+                    print_command->dead_frequency
+                );
 
                 if (new_command == NULL) {
                     new_command = parsed_command;
@@ -614,7 +647,11 @@ static int frequency_to_control(const float frequency) {
 }
 
 
-static int parse_json(const char* const json, struct command_node_t** command) {
+static int parse_json(
+    const char* const json,
+    struct command_node_t** command,
+    int* const request_response
+) {
     json_t* root = NULL;
     json_t* object = NULL;
     json_t* data = NULL;
@@ -640,7 +677,7 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         if (!json_is_object(object)) {
             fprintf(
                 stderr,
-                "Item %d in array is not an object\n",
+                "Item %zu in array is not an object\n",
                 array_index + 1
             );
             goto CLEANUP;
@@ -655,7 +692,7 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         } else {
             fprintf(
                 stderr,
-                "In item %d: missing or invalid field: burst_us\n",
+                "In item %zu: missing or invalid field: burst_us\n",
                 array_index + 1
             );
             goto CLEANUP;
@@ -667,7 +704,7 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         } else {
             fprintf(
                 stderr,
-                "In item %d: missing or invalid field: spacing_us\n",
+                "In item %zu: missing or invalid field: spacing_us\n",
                 array_index + 1
             );
             goto CLEANUP;
@@ -679,7 +716,7 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         } else {
             fprintf(
                 stderr,
-                "In item %d: missing or invalid field: repeats\n",
+                "In item %zu: missing or invalid field: repeats\n",
                 array_index + 1
             );
             goto CLEANUP;
@@ -691,7 +728,7 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         } else {
             fprintf(
                 stderr,
-                "In item %d: missing or invalid field: frequency\n",
+                "In item %zu: missing or invalid field: frequency\n",
                 array_index + 1
             );
             goto CLEANUP;
@@ -703,10 +740,18 @@ static int parse_json(const char* const json, struct command_node_t** command) {
         } else {
             fprintf(
                 stderr,
-                "In item %d: missing or invalid field: dead_frequency\n",
+                "In item %zu: missing or invalid field: dead_frequency\n",
                 array_index + 1
             );
             goto CLEANUP;
+        }
+
+        data = json_object_get(object, "request_response");
+        // request_response is optional so if it isn't a port number, ignore it
+        if (data != NULL && json_is_true(data)) {
+            *request_response = 1;
+        } else {
+            *request_response = 0;
         }
 
         command = &((*command)->next);
