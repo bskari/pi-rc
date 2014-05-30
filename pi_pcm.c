@@ -104,6 +104,8 @@
 #define BCM2708_DMA_END         (1<<1)
 #define BCM2708_DMA_RESET       (1<<31)
 #define BCM2708_DMA_INT         (1<<2)
+#define BCM2708_DMA_ABORT       (1<<30)  // Stop current CB, go to next, WO
+#define BCM2708_DMA_ACTIVE      (1<<0)
 
 #define DMA_CS          (0x00/4)
 #define DMA_CONBLK_AD       (0x04/4)
@@ -213,8 +215,14 @@ int main(int argc, char** argv) {
     // Catch all signals possible - it is vital we kill the DMA engine
     // on process exit!
     for (i = 1; i < 64; i++) {
-        // These are uncatchable
-        if (i != SIGKILL && i != SIGSTOP) {
+        // These are uncatchable or harmless
+        if (
+            i != SIGKILL
+            && i != SIGSTOP
+            && i != SIGVTALRM
+            && i != SIGWINCH
+            && i != SIGPROF
+        ) {
             memset(&sa, 0, sizeof(sa));
             sa.sa_handler = terminate;
             sigaction(i, &sa, NULL);
@@ -376,7 +384,7 @@ int main(int argc, char** argv) {
         fatal("Unable to set socket options\n");
     }
 
-    char json_buffer[1000];
+    char* const json_buffer = malloc(50000);
 
     while (1) {
         // This is nonblocking because we set it as such as above
@@ -478,18 +486,18 @@ static void udelay(int us) {
 
 
 static void terminate(const int signal_) {
-    if (signal_ == SIGVTALRM || signal_ == 28) {
-        // This is normal and safe, ignore it
-        return;
-    }
     printf("Terminating with signal %d\n", signal_);
     if (dma_reg) {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
+        udelay(500);
+        // Abort the whole DMA
+        dma_reg[DMA_CS] = BCM2708_DMA_ABORT | BCM2708_DMA_ACTIVE;
         udelay(500);
     }
     if (socket_handle != 0) {
         close(socket_handle);
     }
+
     exit(1);
 }
 
@@ -566,6 +574,7 @@ int fill_buffer(
         repeat_count = command->repeats;
         current_command = command;
     }
+    static int frequency_control;
 
     static uint32_t last_cb = 0;
     if (last_cb == 0) {
@@ -589,6 +598,7 @@ int fill_buffer(
                 case BURST:
                     time_us += current_command->spacing_us;
                     state = SPACING;
+                    frequency_control = frequency_to_control(current_command->dead_frequency);
                     break;
                 case SPACING:
                     --repeat_count;
@@ -609,6 +619,7 @@ int fill_buffer(
                         time_us += current_command->burst_us;
                         state = BURST;
                     }
+                    frequency_control = frequency_to_control(current_command->frequency);
                     break;
                 default:
                     assert(0 && "Unknown state");
@@ -616,18 +627,6 @@ int fill_buffer(
         }
         assert(time_us > 0.0f && "Time should be positive");
 
-        int frequency_control;
-        switch (state) {
-            case BURST:
-                frequency_control = frequency_to_control(current_command->frequency);
-                break;
-            case SPACING:
-                frequency_control = frequency_to_control(current_command->dead_frequency);
-                break;
-            default:
-                assert(0 && "Unknown state when looking for frequency control");
-                frequency_control = frequency_to_control(current_command->frequency);
-        }
         ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control);
         if (last_sample == NUM_SAMPLES) {
             last_sample = 0;
