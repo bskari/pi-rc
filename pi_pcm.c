@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
         fatal("Unable to set socket options\n");
     }
 
-    char* const json_buffer = malloc(50000);
+    char json_buffer[20000];
 
     while (1) {
         // This is nonblocking because we set it as such as above
@@ -497,7 +497,6 @@ static void terminate(const int signal_) {
     if (socket_handle != 0) {
         close(socket_handle);
     }
-
     exit(1);
 }
 
