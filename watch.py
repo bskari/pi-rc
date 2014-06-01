@@ -298,7 +298,12 @@ def main():
 
     print('Sending commands to ' + args.server + ':' + str(args.port))
     try:
-        search_for_command_codes(args.server, args.port, frequencies)
+        search_for_command_codes(
+                args.server,
+                args.port,
+                frequencies,
+                bit_depth=args.bit_depth
+        )
     # pylint: disable=broad-except
     except Exception as exc:
         print('Caught exception, exiting')
