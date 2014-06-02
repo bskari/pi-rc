@@ -1,5 +1,6 @@
 {
     "name": "Pro Dirt",
+    "description": "New Bright 1:24 truck, sold at Radio Shack for $9.97",
     "frequency": 26.995,
     "synchronization_burst_us": 1200,
     "synchronization_spacing_us": 400,
