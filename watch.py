@@ -127,7 +127,7 @@ def command_iterator(frequency):
 def start_image_capture_process():
     """Starts the image capture background process."""
     image_capture_command_parts = [
-        '/usr/bin/gst-launch-0.10', '-e',
+        '/usr/bin/gst-launch', '-e',
         'v4l2src',
         '!', 'video/x-raw-rgb,width=640,height=480',
         '!', 'videorate',
