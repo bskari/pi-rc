@@ -25,17 +25,38 @@ run it as root:
     su
     ./pi_pcm
 
+If you get an error like
+
+    fatal error: jansson.h: No such file or directory compilation terminated.
+
+you'll need to install the Jansson JSON-parsing library. Run:
+
+    su
+    apt-get install libjansson-dev
+
+and then try compiling again.
+
 Every RC car I've seen uses a different set of command codes, so you'll need to
 run another program that iterates through possible command codes and watches
 the RC car to see if it responds. Once it does, it will save the image and the
 command that caused the car to move.
 
-To run this search, you'll need a computer with a webcam with `gstreamer` installed. You can run this
-program on the Raspberry Pi or a separate computer. Place the car in an area
-where you can control the lighting and avoid changes in ambient lighting, such
-as a closet, and turn it on. If your car is darkly colored, try to place it
-against a white background, such as putting a piece of paper behind it. Point
-the webcam at it and run:
+To run this search, you'll need a computer with a webcam with `gstreamer`
+installed. There are two versions of gstreamer available, and some computers
+might only have access to one or the other. Try running this first command (as
+root):
+
+    apt-get install gstreamer1.0
+
+and if that doesn't work, try this second one (also as root):
+
+    apt-get install gstreamer0.10
+
+You can run this search program on the Raspberry Pi or a separate computer.
+Place the car in an area where you can control the lighting and avoid changes
+in ambient lighting, such as a closet, and turn the car on. If your car is
+darkly colored, try to place it against a white background, for example by
+putting a piece of paper behind it. Point the webcam at it and run:
 
     python watch.py -f [frequency] -s [Pi IP address]
 
