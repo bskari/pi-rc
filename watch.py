@@ -1,6 +1,4 @@
 """Watches the RC car for movement."""
-from PIL import Image
-from PIL import ImageOps
 from collections import deque
 import argparse
 import atexit
@@ -43,6 +41,7 @@ def terminate():
 
 def normalize(img, bit_depth=None):
     """Linear normalization and conversion to grayscale of an image."""
+    from PIL import ImageOps
     img = ImageOps.grayscale(img)
     img = ImageOps.autocontrast(img)
     if bit_depth is not None:
@@ -68,6 +67,7 @@ def standard_deviation(values, mean_=None):
 
 def get_picture(file_name=None, crop_box=None):
     """Saves a picture from the webcam."""
+    from PIL import Image
     if file_name is None:
         file_name = 'photo.png'
 
@@ -144,21 +144,29 @@ def start_image_capture_process():
         time.sleep(5)
 
 
-def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=None):
+def search_for_command_codes(
+    host,
+    port,
+    frequencies,
+    crop_box=None,
+    bit_depth=None,
+    use_camera=True
+):
     """Iterates through commands and looks for changes in the webcam."""
-    diffs = deque()
-    pictures = deque()
+    if use_camera:
+        diffs = deque()
+        pictures = deque()
 
-    base = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
-    base.save('normalized-test.png')
-    time.sleep(1)
-    print('Filling base photos for difference analysis')
-    for _ in range(20):
-        recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
-        diff = percent_difference(base, recent)
+        base = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
+        base.save('normalized-test.png')
         time.sleep(1)
-        diffs.append(diff)
-        pictures.append(recent)
+        print('Filling base photos for difference analysis')
+        for _ in range(20):
+            recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
+            diff = percent_difference(base, recent)
+            time.sleep(1)
+            diffs.append(diff)
+            pictures.append(recent)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -167,6 +175,7 @@ def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=N
             frequencies=', '.join((str(f) for f in frequencies))
         )
     )
+    command_tuple_description = ('freq', 'useconds', 'multiplier', 'sync_repeats', 'signal_repeats')
     for frequency in frequencies:
         for command_tuple in command_iterator(frequency):
             # pylint: disable=star-args
@@ -176,35 +185,50 @@ def search_for_command_codes(host, port, frequencies, crop_box=None, bit_depth=N
             sock.sendto(command, (host, port))
             time.sleep(1)
 
-            recent = normalize(
-                get_picture(crop_box=crop_box),
-                bit_depth=bit_depth
-            )
-            # Let's compare the most recent photo to the oldest one, in case a
-            # cloud passes over and the brightness changes
-            diff = percent_difference(pictures[0], recent)
-            std_dev = standard_deviation(diffs)
-            mean_ = mean(diffs)
-            # I should be doing a z-test or something here... eh
-            if abs(diff - mean_) > (std_dev * 3.0) and diff > 2.0:
-                print('Found substantially different photo, saving...')
+            if not use_camera:
                 print(
-                    'diff={diff}, mean={mean}, std dev={std_dev}'
-                    ' at {time}'.format(
-                        diff=diff,
-                        mean=mean_,
-                        std_dev=std_dev,
-                        time=str(datetime.datetime.now())
-                    )
+                    ' '.join((
+                        (desc + ':' + str(value)) for desc, value in zip(
+                            command_tuple_description,
+                            command_tuple
+                        )
+                    ))
                 )
-                file_name = '-'.join(str(i) for i in command_tuple)
-                os.rename('photo.png', file_name + '.png')
-                time.sleep(2)
+            else:
+                recent = normalize(
+                    get_picture(crop_box=crop_box),
+                    bit_depth=bit_depth
+                )
+                # Let's compare the most recent photo to the oldest one, in case a
+                # cloud passes over and the brightness changes
+                diff = percent_difference(pictures[0], recent)
+                std_dev = standard_deviation(diffs)
+                mean_ = mean(diffs)
+                # I should be doing a z-test or something here... eh
+                if abs(diff - mean_) > (std_dev * 3.0) and diff > 2.0:
+                    print('Found substantially different photo, saving...')
+                    print(
+                        'diff={diff}, mean={mean}, std dev={std_dev}'
+                        ' at {time}'.format(
+                            diff=diff,
+                            mean=mean_,
+                            std_dev=std_dev,
+                            time=str(datetime.datetime.now())
+                        )
+                    )
+                    file_name = '-'.join(
+                        (desc + '-' + str(value)) for desc, value in zip(
+                            command_tuple_description,
+                            command_tuple
+                        )
+                    )
+                    os.rename('photo.png', file_name + '.png')
+                    time.sleep(2)
 
-            diffs.popleft()
-            diffs.append(diff)
-            pictures.popleft()
-            pictures.append(recent)
+                diffs.popleft()
+                diffs.append(diff)
+                pictures.popleft()
+                pictures.append(recent)
 
 
 def make_parser():
@@ -262,6 +286,13 @@ def make_parser():
         default=1
     )
 
+    parser.add_argument(
+        '--no-camera',
+        dest='no_camera',
+        help='Disable the camera and image recognication. Users will need to watch the RC car.',
+        action='store_true'
+    )
+
     return parser
 
 
@@ -283,7 +314,20 @@ def main():
         print('Server does not appear to be listening for messages, aborting')
         return
 
-    start_image_capture_process()
+    if not args.no_camera:
+        try:
+            import PIL
+        except ImportError as e:
+            sys.stderr.write(
+'''Using the camera to detect movement requires the Python PIL libraries and
+gstreamer. You can install them by running:
+    apt-get install python-imaging gstreamer0.10
+Or, you can use the `--no-camera` option and just watch the RC car for
+movement. When it does, hit <Ctrl> + C and use the last printed values.
+'''
+            )
+            sys.exit(1)
+        start_image_capture_process()
 
     # RC cars in the 27 and 49 MHz spectrum typically operate on one of a
     # several channels in that frequency, but most toy RC cars that I've
@@ -302,7 +346,8 @@ def main():
                 args.server,
                 args.port,
                 frequencies,
-                bit_depth=args.bit_depth
+                bit_depth=args.bit_depth,
+                use_camera=(not args.no_camera)
         )
     # pylint: disable=broad-except
     except Exception as exc:
