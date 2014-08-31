@@ -38,7 +38,6 @@ def terminate():
         pass
 
 
-
 def normalize(img, bit_depth=None):
     """Linear normalization and conversion to grayscale of an image."""
     from PIL import ImageOps
@@ -65,13 +64,32 @@ def standard_deviation(values, mean_=None):
     return math.sqrt((1.0 / (size - 1)) * (sum_ / size))
 
 
-def get_picture(file_name=None, crop_box=None):
+def get_picture_from_filesystem(file_name=None, crop_box=None):
     """Saves a picture from the webcam."""
     from PIL import Image
     if file_name is None:
         file_name = 'photo.png'
 
     image = Image.open(file_name)
+    if crop_box is not None:
+        image = image.crop(crop_box)
+    return image
+
+
+def get_picture_from_raspi_cam(crop_box=None):
+    """Saves a picture from the Raspberry Pi camera."""
+    from PIL import Image
+    import StringIO
+
+    # Use pipes to avoid writing to the disk
+    pipe = subprocess.Popen(
+        ('raspistill', '-w', '640', '-h', '480', '-t', '100', '-o', '-'),
+        stdout=subprocess.PIPE
+    )
+
+    file_buffer = StringIO.StringIO(pipe.stdout.read())
+    pipe.stdout.close()
+    image = Image.open(file_buffer)
     if crop_box is not None:
         image = image.crop(crop_box)
     return image
@@ -148,21 +166,23 @@ def search_for_command_codes(
     host,
     port,
     frequencies,
-    crop_box=None,
-    bit_depth=None,
-    use_camera=True
+    get_picture_function=None,
+    bit_depth=None
 ):
     """Iterates through commands and looks for changes in the webcam."""
-    if use_camera:
+    if get_picture_function is not None:
         diffs = deque()
         pictures = deque()
 
-        base = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
-        base.save('normalized-test.png')
+        base = normalize(get_picture_function(), bit_depth=bit_depth)
+        try:
+            base.save('normalized-test.png')
+        except:
+            pass
         time.sleep(1)
         print('Filling base photos for difference analysis')
         for _ in range(20):
-            recent = normalize(get_picture(crop_box=crop_box), bit_depth=bit_depth)
+            recent = normalize(get_picture_function(), bit_depth=bit_depth)
             diff = percent_difference(base, recent)
             time.sleep(1)
             diffs.append(diff)
@@ -185,7 +205,7 @@ def search_for_command_codes(
             sock.sendto(command, (host, port))
             time.sleep(1)
 
-            if not use_camera:
+            if get_picture_function is None:
                 print(
                     ' '.join((
                         (desc + ':' + str(value)) for desc, value in zip(
@@ -196,7 +216,7 @@ def search_for_command_codes(
                 )
             else:
                 recent = normalize(
-                    get_picture(crop_box=crop_box),
+                    get_picture_function(),
                     bit_depth=bit_depth
                 )
                 # Let's compare the most recent photo to the oldest one, in case a
@@ -222,7 +242,11 @@ def search_for_command_codes(
                             command_tuple
                         )
                     )
-                    os.rename('photo.png', file_name + '.png')
+                    try:
+                        image = get_picture_function()
+                        image.save(file_name + '.png')
+                    except Exception as e:
+                        print('Unable to save photo: ' + str(e))
                     time.sleep(2)
 
                 diffs.popleft()
@@ -293,6 +317,19 @@ def make_parser():
         action='store_true'
     )
 
+    parser.add_argument(
+        '--raspberry-pi-camera',
+        dest='raspi_camera',
+        help='Force the use of the Raspberry Pi camera.',
+        action='store_true'
+    )
+    parser.add_argument(
+        '--webcam',
+        dest='webcam',
+        help='Force the use of a webcam.',
+        action='store_true'
+    )
+
     return parser
 
 
@@ -311,7 +348,10 @@ def main():
         pass
 
     if not server_up(args.server, args.port, args.frequency):
-        print('Server does not appear to be listening for messages, aborting')
+        print(
+'''Server does not appear to be listening for messages, aborting.
+Did you run pi_pcm?'''
+        )
         return
 
     if not args.no_camera:
@@ -319,15 +359,31 @@ def main():
             import PIL
         except ImportError as e:
             sys.stderr.write(
-'''Using the camera to detect movement requires the Python PIL libraries and
-gstreamer. You can install them by running:
-    apt-get install python-imaging gstreamer0.10
+'''Using the camera to detect movement requires the Python PIL libraries. You
+can install them by running:
+    apt-get install python-imaging
 Or, you can use the `--no-camera` option and just watch the RC car for
 movement. When it does, hit <Ctrl> + C and use the last printed values.
 '''
             )
             sys.exit(1)
-        start_image_capture_process()
+
+        if args.webcam and args.raspi_camera:
+            sys.stderr.write(
+                'You can only specify one of --webcam and --rasberry-pi-camera.'
+            )
+            sys.exit(1)
+        if not args.webcam and not args.raspi_camera:
+            # Find which to use
+            raspi_exists = subprocess.call(('/usr/bin/which', 'raspistill'))
+            if raspi_exists == 0:
+                args.raspi_camera = True
+            else:
+                args.raspi_camera = False
+            args.webcam = not args.raspi_camera
+
+        if args.webcam:
+            start_image_capture_process()
 
     # RC cars in the 27 and 49 MHz spectrum typically operate on one of a
     # several channels in that frequency, but most toy RC cars that I've
@@ -342,12 +398,24 @@ movement. When it does, hit <Ctrl> + C and use the last printed values.
 
     print('Sending commands to ' + args.server + ':' + str(args.port))
     try:
+        if args.no_camera:
+            picture_function = None
+        elif args.webcam:
+            print('Using images from webcam')
+            picture_function = get_picture_from_filesystem
+        elif args.raspi_camera:
+            print('Using images from Raspberry Pi camera')
+            picture_function = get_picture_from_raspi_cam
+        else:
+            print('Not using camera')
+            picture_function = None
+
         search_for_command_codes(
-                args.server,
-                args.port,
-                frequencies,
-                bit_depth=args.bit_depth,
-                use_camera=(not args.no_camera)
+            args.server,
+            args.port,
+            frequencies,
+            get_picture_function=picture_function,
+            bit_depth=args.bit_depth,
         )
     # pylint: disable=broad-except
     except Exception as exc:
