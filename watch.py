@@ -289,7 +289,7 @@ def make_parser():
     parser.add_argument(
         '--no-camera',
         dest='no_camera',
-        help='Disable the camera and image recognication. Users will need to watch the RC car.',
+        help='Disable the camera and image recognition. You will need to watch the RC car manually.',
         action='store_true'
     )
 
