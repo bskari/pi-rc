@@ -45,10 +45,6 @@ installed, or a Raspberry Pi with a camera module. To install streamer, run:
 
     apt-get install streamer
 
-and if that doesn't work, try this second one (also as root):
-
-    apt-get install gstreamer0.10
-
 You can run this search program on the Raspberry Pi or a separate computer.
 Place the car in an area where you can control the lighting and avoid changes
 in ambient lighting, such as a closet, and turn the car on. If your car is
@@ -59,22 +55,21 @@ putting a piece of paper behind it. Point the webcam at it and run:
 
 where frequency is the radio control frequency of the RC car. Most toy-grade RC
 cars run in the 27 or 49 MHz band, which should be printed on the car. Most
-cars run in a specific frequency in the 27 or 49 MHz band, such as 27.255; if you
-don't know the car's exact frequency, the program will incrementally search all of
-them. Once the program sees the car move, it will save the image of the car
-moving with a file named with the format
-`frequency-microseconds-syncBurstLength-syncBurstCount-signalCount.png`.
+cars run in a specific frequency in the 27 or 49 MHz band, such as 27.255; if
+you don't know the car's exact frequency, the program will incrementally search
+all of them if you specify 27 or 49. Once the program sees the car move, it
+will save the image of the car moving with a file named with the parameters
+of the command that it just broadcast.
 
 Now that you have the basic command structure, you can search for the specific
 commands to make it drive. Run
 
-    python control.py -f [frequency] -s [Pi IP address] -u [microseconds]
+    python control.py -f [frequency] -s [Pi IP address]
 
-The program will prompt you for the synchronization burst length and
-synchronization burst count, and then ask you repeatedly to enter different
-signal bursts. Try entering values from 1-100 and see how the car reacts.
-Certain values should make the car drive some combination of forward/reverse +
-left/right.
+The program will prompt you for the values found from the search, and then ask
+you repeatedly to enter different signal bursts. Try entering values from 1-100
+and see how the car reacts.  Certain values should make the car drive some
+combination of forward/reverse + left/right.
 
 Once you have all of the signals, you can save the information in a JSON file.
 See `control-specs/pro-dirt.json` for an example. Now you should be able to run
