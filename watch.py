@@ -191,9 +191,6 @@ def search_for_command_codes(
                 diff = percent_difference(pictures[0], recent)
                 std_dev = standard_deviation(diffs)
                 mean_ = mean(diffs)
-                print(
-                    'diff:{0} mean:{1} std_dev:{2}'.format(diff, mean_, std_dev)
-                )
 
             while time.time() < start + 1.0:
                 time.sleep(0.1)
