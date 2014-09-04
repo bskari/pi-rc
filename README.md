@@ -17,7 +17,7 @@ Getting started
 pi-rc should work with most toy-grade RC cars, i.e. ones that only drive
 forward, backward, left, and right. To get started, place a jumper cable on
 GPIO pin 4 (that's pin 7 on the revision B board, see [this
-diagram](http://elinux.org/RPi_Low-level_peripherals#General_Purpose_Input.2FOutput_.28GPIO.29))
+diagram](http://upload.wikimedia.org/wikipedia/commons/9/97/Raspberrypi_pcb_overview_Pinout_v01.svg)
 to act as an antenna and compile the `pi_pcm` program on your Raspberry Pi and
 run it as root:
 
