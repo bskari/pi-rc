@@ -148,7 +148,7 @@ def search_for_command_codes(
         base = normalize(get_picture_function(), bit_depth=bit_depth)
         try:
             base.save('normalized-test.png')
-        except:
+        except Exception:
             pass
         time.sleep(1)
         print('Filling base photos for difference analysis')
@@ -186,12 +186,14 @@ def search_for_command_codes(
                 # we'll do the normalization while we're waiting for the
                 # command to broadcast for a full second
                 recent = normalize(previous_image, bit_depth=bit_depth)
-                # Let's compare the most recent photo to the oldest one, in case a
-                # cloud passes over and the brightness changes
+                # Let's compare the most recent photo to the oldest one,
+                # in case a cloud passes over and the brightness changes
                 diff = percent_difference(pictures[0], recent)
                 std_dev = standard_deviation(diffs)
                 mean_ = mean(diffs)
-                print('diff:{0} mean:{1} std_dev:{2}'.format(diff, mean_, std_dev))
+                print(
+                    'diff:{0} mean:{1} std_dev:{2}'.format(diff, mean_, std_dev)
+                )
 
             while time.time() < start + 1.0:
                 time.sleep(0.1)
@@ -229,9 +231,9 @@ def search_for_command_codes(
                     try:
                         image = get_picture_function()
                         image.save(file_name + '.png')
-                    except Exception as e:
+                    except Exception as exc:
                         print(file_name)
-                        print('Unable to save photo: ' + str(e))
+                        print('Unable to save photo: ' + str(exc))
                     time.sleep(2)
 
                 diffs.popleft()
@@ -298,7 +300,8 @@ def make_parser():
     parser.add_argument(
         '--no-camera',
         dest='no_camera',
-        help='Disable the camera and image recognition. You will need to watch the RC car manually.',
+        help='Disable the camera and image recognition. You will need to watch'
+            ' the RC car manually.',
         action='store_true',
         default=False
     )
@@ -307,13 +310,15 @@ def make_parser():
         '--raspberry-pi-camera',
         dest='raspi_camera',
         help='Force the use of the Raspberry Pi camera.',
-        action='store_true'
+        action='store_true',
+        default=False
     )
     parser.add_argument(
         '--webcam',
         dest='webcam',
         help='Force the use of a webcam.',
-        action='store_true'
+        action='store_true',
+        default=False
     )
 
     return parser
@@ -338,10 +343,12 @@ Did you run pi_pcm?'''
         )
         return
 
+    webcam = args.webcam
+    raspi_camera = args.raspi_camera
     if not args.no_camera:
         try:
-            import PIL
-        except ImportError as e:
+            import PIL as _
+        except ImportError:
             sys.stderr.write(
 '''Using the camera to detect movement requires the Python PIL libraries. You
 can install them by running:
@@ -352,12 +359,12 @@ movement. When it does, hit <Ctrl> + C and use the last printed values.
             )
             sys.exit(1)
 
-        if args.webcam and args.raspi_camera:
+        if webcam and raspi_camera:
             sys.stderr.write(
                 'You can only specify one of --webcam and --rasberry-pi-camera.'
             )
             sys.exit(1)
-        if not args.webcam and not args.raspi_camera:
+        if not webcam and not raspi_camera:
             # Find which to use
             raspi_exists = subprocess.call(
                 ('/usr/bin/which', 'raspistill'),
@@ -391,7 +398,7 @@ movement. When it does, hit <Ctrl> + C and use the last printed values.
                 ('streamer', '-f', 'jpeg', '-s', '640x480', '-o', '/dev/stdout')
             )
             picture_thread.start()
-            picture_function = lambda: picture_thread.get_picture()
+            picture_function = picture_thread.get_picture
         elif raspi_camera:
             print('Using images from Raspberry Pi camera module')
             # Use a smaller size here, because computing the % difference
@@ -400,7 +407,7 @@ movement. When it does, hit <Ctrl> + C and use the last printed values.
                 ('raspistill', '-w', '320', '-h', '240', '-t', '100', '-o', '-')
             )
             picture_thread.start()
-            picture_function = lambda: picture_thread.get_picture()
+            picture_function = picture_thread.get_picture
         else:
             print('Not using camera')
             picture_function = None
