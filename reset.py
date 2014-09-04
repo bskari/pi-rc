@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """Stops the Raspberry Pi from broadcasting a radio signal."""
 from RPi import GPIO
 

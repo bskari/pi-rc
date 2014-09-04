@@ -1,7 +1,7 @@
+#!/usr/bin/env python
 """Watches the RC car for movement."""
 from collections import deque
 import argparse
-import atexit
 import datetime
 import math
 import os

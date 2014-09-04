@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """Manually send commands to the RC car."""
 import argparse
 import json
@@ -319,6 +320,9 @@ def main():
     args = parser.parse_args()
 
     print('Sending commands to ' + args.server + ':' + str(args.port))
+    if not server_up(args.server, args.port, args.frequency):
+        sys.stderr.write('Unable to contact server; did you start it?\n')
+        sys.exit(1)
 
     interactive_control(args.server, args.port, args.frequency)
 

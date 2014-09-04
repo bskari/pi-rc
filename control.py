@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """Manually send commands to the RC car."""
 import argparse
 import socket

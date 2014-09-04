@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """Interactive control for the remote radio control Raspberry Pi."""
 import argparse
 import json
