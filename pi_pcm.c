@@ -58,12 +58,13 @@
  * Richard Hirst <richardghirst@gmail.com>  December 2012
  */
 
+#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <jansson.h>
 #include <math.h>
-#include <arpa/inet.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -186,6 +187,12 @@ struct control_data_s {
 static struct control_data_s* ctl;
 static int socket_handle = 0;
 
+struct pi_options {
+    int verbose;
+    int port;
+};
+static struct pi_options get_args(int argc, char* argv[]);
+static void print_usage(const char* program);
 static void udelay(int us);
 static void terminate(int unused);
 static void fatal(char* fmt, ...);
@@ -208,6 +215,7 @@ static void free_command(struct command_node_t* command);
 
 
 int main(int argc, char** argv) {
+    struct pi_options options = get_args(argc, argv);
     int i, mem_fd, pid;
     char pagemap_fn[64];
 
@@ -248,7 +256,9 @@ int main(int argc, char** argv) {
     if ((unsigned long)virtbase & (PAGE_SIZE - 1)) {
         fatal("Virtual address is not page aligned\n");
     }
-    printf("Virtual memory mapped at %p\n", virtbase);
+    if (options.verbose) {
+        printf("Virtual memory mapped at %p\n", virtbase);
+    }
     page_map = malloc(NUM_PAGES * sizeof(*page_map));
     if (page_map == 0) {
         fatal("Failed to malloc page_map: %m\n");
@@ -345,7 +355,9 @@ int main(int argc, char** argv) {
     udelay(10);
     dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
     dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
-    printf("virt %x\n", mem_virt_to_phys(ctl->cb));
+    if (options.verbose) {
+        printf("virt %x\n", mem_virt_to_phys(ctl->cb));
+    }
     dma_reg[DMA_DEBUG] = 7; // clear debug error flags
     dma_reg[DMA_CS] = 0x10880001;   // go, mid priority, wait for outstanding writes
 
@@ -369,8 +381,7 @@ int main(int argc, char** argv) {
     bzero(&client_address, sizeof(client_address));
     server_address.sin_family = AF_INET;
     server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    const short port = (argc > 2) ? atoi(argv[2]) : 12345;
-    server_address.sin_port = htons(port);
+    server_address.sin_port = htons(options.port);
     const int bind_status = bind(
         socket_handle,
         (struct sockaddr*)&server_address,
@@ -440,14 +451,16 @@ int main(int argc, char** argv) {
                     ? parsed_command
                     : parsed_command->next
                 );
-                printf(
-                    "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
-                    print_command->repeats,
-                    print_command->burst_us,
-                    print_command->spacing_us,
-                    print_command->frequency,
-                    print_command->dead_frequency
-                );
+                if (options.verbose) {
+                    printf(
+                        "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
+                        print_command->repeats,
+                        print_command->burst_us,
+                        print_command->spacing_us,
+                        print_command->frequency,
+                        print_command->dead_frequency
+                    );
+                }
 
                 if (new_command == NULL) {
                     new_command = parsed_command;
@@ -771,4 +784,50 @@ static void free_command(struct command_node_t* command) {
         command = command->next;
         free(previous);
     }
+}
+
+
+static struct pi_options get_args(const int argc, char* argv[]) {
+    const struct option long_options[] = {
+        {"help", no_argument, NULL, 'h'},
+        {"verbose", no_argument, NULL, 'v'},
+        {"port", required_argument, NULL, 'p'},
+        {0, 0, 0, 0}
+    };
+    struct pi_options options;
+    options.port = 12345;
+    options.verbose = 0;
+    int opt;
+    int long_index = 0;
+    while (1) {
+        opt = getopt_long(argc, argv, "hvp:", long_options, &long_index);
+        if (opt == -1) {
+            break;
+        }
+        switch (opt) {
+            case 'h':
+                print_usage(argv[0]);
+                exit(EXIT_SUCCESS);
+                break;
+            case 'v':
+                options.verbose = 1;
+                break;
+            case 'p':
+                options.port = atoi(optarg);
+                break;
+            default:
+                fprintf(stderr, "Unknown option\n");
+                print_usage(argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
+    return options;
+}
+
+
+static void print_usage(const char* program) {
+    printf("Usage: %s [OPTION]\n", program);
+    printf("-p, --port     The port to listen for messags on.\n");
+    printf("-h, --help     Print this help message.\n");
+    printf("-v, --verbose  Print more debugging information.\n");
 }
