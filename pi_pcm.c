@@ -186,9 +186,12 @@ struct control_data_s {
 
 static struct control_data_s* ctl;
 static int socket_handle = 0;
+static int tcp_socket_connection = 0;
 
 struct pi_options {
     int verbose;
+    int udp;
+    int tcp;
     int port;
 };
 static struct pi_options get_args(int argc, char* argv[]);
@@ -240,16 +243,19 @@ int main(int argc, char** argv) {
     // Calculate the frequency control word
     // The fractional part is stored in the lower 12 bits
     float frequency = 49.830;
-    printf("Broadcasting at %0.3f\n", frequency);
 
     dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
     clk_reg = map_peripheral(CLK_BASE, CLK_LEN);
     gpio_reg = map_peripheral(GPIO_BASE, GPIO_LEN);
 
-    virtbase = mmap(NULL, NUM_PAGES * PAGE_SIZE, PROT_READ | PROT_WRITE,
-                    MAP_SHARED | MAP_ANONYMOUS | MAP_NORESERVE | MAP_LOCKED,
-                    -1, 0);
+    virtbase = mmap(
+        NULL,
+        NUM_PAGES * PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED | MAP_ANONYMOUS | MAP_NORESERVE | MAP_LOCKED,
+        -1,
+        0);
     if (virtbase == MAP_FAILED) {
         fatal("Failed to mmap physical pages: %m\n");
     }
@@ -268,8 +274,7 @@ int main(int argc, char** argv) {
         pagemap_fn,
         sizeof(pagemap_fn) / sizeof(pagemap_fn[0]),
         "/proc/%d/pagemap",
-        pid
-    );
+        pid);
     mem_fd = open(pagemap_fn, O_RDONLY);
     if (mem_fd < 0) {
         fatal("Failed to open %s: %m\n", pagemap_fn);
@@ -371,7 +376,11 @@ int main(int argc, char** argv) {
 
     struct command_node_t* new_command = NULL;
 
-    socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (options.udp) {
+        socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    } else {
+        socket_handle = socket(AF_INET, SOCK_STREAM, 0);
+    }
     if (socket_handle < 0) {
         fatal("Unable to create socket\n");
     }
@@ -385,28 +394,76 @@ int main(int argc, char** argv) {
     const int bind_status = bind(
         socket_handle,
         (struct sockaddr*)&server_address,
-        sizeof(server_address)
-    );
+        sizeof(server_address));
     if (bind_status < 0) {
         fatal("Unable to bind socket\n");
     }
-    const int fcntl_status = fcntl(socket_handle, F_SETFL, O_NONBLOCK);
+
+    if (options.tcp) {
+        const int listen_status = listen(socket_handle, 1);
+        if (listen_status < 0) {
+            fatal("Unable to listen\n");
+        }
+        tcp_socket_connection = accept(socket_handle, NULL, NULL);
+        if (tcp_socket_connection < 0) {
+            fatal("Unable to accept TCP connection\n");
+        }
+    }
+
+    int fcntl_status = fcntl(socket_handle, F_SETFL, O_NONBLOCK);
     if (fcntl_status < 0) {
         fatal("Unable to set socket options\n");
+    }
+    if (options.tcp) {
+        fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
+        if (fcntl_status < 0) {
+            fatal("Unable to set socket options\n");
+        }
     }
 
     char json_buffer[20000];
 
     while (1) {
         // This is nonblocking because we set it as such as above
-        const int bytes_count = recvfrom(
-            socket_handle,
-            json_buffer,
-            sizeof(json_buffer) / sizeof(json_buffer[0]),
-            0,
-            (struct sockaddr*)&client_address,
-            &client_length
-        );
+        int bytes_count;
+        if (options.udp) {
+            bytes_count = recvfrom(
+                socket_handle,
+                json_buffer,
+                sizeof(json_buffer) / sizeof(json_buffer[0]),
+                0,
+                (struct sockaddr*)&client_address,
+                &client_length);
+        } else {
+            if (tcp_socket_connection != 0) {
+                bytes_count = recv(
+                    tcp_socket_connection,
+                    json_buffer,
+                    sizeof(json_buffer) / sizeof(json_buffer[0]),
+                    0);
+                if (bytes_count == 0) {
+                    /* Socket closed, wait for another connection */
+                    tcp_socket_connection = 0;
+                }
+            } else {
+                /* Look for another connection */
+                tcp_socket_connection = accept(socket_handle, NULL, NULL);
+                if (tcp_socket_connection < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        /* No connection ready, just keep running */
+                        tcp_socket_connection = 0;
+                    } else {
+                        fatal("Unable to accept TCP connection\n");
+                    }
+                } else {
+                    fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
+                    if (fcntl_status < 0) {
+                        fatal("Unable to set socket options\n");
+                    }
+                    continue;
+                }
+            }
+        }
         // If the received message is too long, then it will be truncated.  All
         // valid messages should always fit in the buffer, so just ignore it if
         // it's too long.
@@ -415,21 +472,22 @@ int main(int argc, char** argv) {
             && (size_t)bytes_count < sizeof(json_buffer) / sizeof(json_buffer[0])
         ) {
             json_buffer[bytes_count] = '\0';
+            if (options.verbose) {
+                printf("%s", json_buffer);
+            }
             struct command_node_t* parsed_command = NULL;
             int request_response = 0;
             const int parse_status = parse_json(
                 json_buffer,
                 &parsed_command,
-                &request_response
-            );
+                &request_response);
 
             if (request_response) {
                 const int length = snprintf(
                     json_buffer,
                     sizeof(json_buffer) / sizeof(json_buffer[0]),
                     "{\"time\": %d}",
-                    (int)time(NULL)
-                );
+                    (int)time(NULL));
                 // The client should be listening for responses on the port one
                 // above the port that it sent to us
                 client_address.sin_port = htons(ntohs(server_address.sin_port) + 1);
@@ -439,27 +497,24 @@ int main(int argc, char** argv) {
                     length,
                     0,
                     (struct sockaddr*)&client_address,
-                    client_length
-                );
+                    client_length);
             }
 
             if (parse_status == 0) {
                 // Command bursts come after synchronization bursts, and
                 // they're the interesting part, so print those
-                const  struct command_node_t* const print_command = (
+                const struct command_node_t* const print_command = (
                     parsed_command->next == NULL
                     ? parsed_command
-                    : parsed_command->next
-                );
+                    : parsed_command->next);
                 if (options.verbose) {
                     printf(
-                        "Sending command %d %f:%f bursts @ %4.3f (%4.3f)\n",
+                        "Sending command %d %d:%d bursts @ %4.3f (%4.3f)\n",
                         print_command->repeats,
-                        print_command->burst_us,
-                        print_command->spacing_us,
+                        (int)print_command->burst_us,
+                        (int)print_command->spacing_us,
                         print_command->frequency,
-                        print_command->dead_frequency
-                    );
+                        print_command->dead_frequency);
                 }
 
                 if (new_command == NULL) {
@@ -470,6 +525,7 @@ int main(int argc, char** argv) {
                     new_command = parsed_command;
                 }
             } else {
+                /* The error message will be printed in the JSON parser */
                 free_command(parsed_command);
             }
         }
@@ -506,6 +562,9 @@ static void terminate(const int signal_) {
         // Abort the whole DMA
         dma_reg[DMA_CS] = BCM2708_DMA_ABORT | BCM2708_DMA_ACTIVE;
         udelay(500);
+    }
+    if (tcp_socket_connection != 0) {
+        close(tcp_socket_connection);
     }
     if (socket_handle != 0) {
         close(socket_handle);
@@ -689,8 +748,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "Item %zu in array is not an object\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -704,8 +762,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "In item %zu: missing or invalid field: burst_us\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -716,8 +773,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "In item %zu: missing or invalid field: spacing_us\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -728,8 +784,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "In item %zu: missing or invalid field: repeats\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -740,8 +795,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "In item %zu: missing or invalid field: frequency\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -752,8 +806,7 @@ static int parse_json(
             fprintf(
                 stderr,
                 "In item %zu: missing or invalid field: dead_frequency\n",
-                array_index + 1
-            );
+                array_index + 1);
             goto CLEANUP;
         }
 
@@ -791,6 +844,8 @@ static struct pi_options get_args(const int argc, char* argv[]) {
     const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
         {"verbose", no_argument, NULL, 'v'},
+        {"tcp", no_argument, NULL, 't'},
+        {"udp", no_argument, NULL, 'u'},
         {"port", required_argument, NULL, 'p'},
         {0, 0, 0, 0}
     };
@@ -800,7 +855,7 @@ static struct pi_options get_args(const int argc, char* argv[]) {
     int opt;
     int long_index = 0;
     while (1) {
-        opt = getopt_long(argc, argv, "hvp:", long_options, &long_index);
+        opt = getopt_long(argc, argv, "hvp:tu", long_options, &long_index);
         if (opt == -1) {
             break;
         }
@@ -815,19 +870,35 @@ static struct pi_options get_args(const int argc, char* argv[]) {
             case 'p':
                 options.port = atoi(optarg);
                 break;
+            case 't':
+                options.tcp = 1;
+                break;
+            case 'u':
+                options.udp = 1;
+                break;
             default:
                 fprintf(stderr, "Unknown option\n");
                 print_usage(argv[0]);
                 exit(EXIT_FAILURE);
         }
     }
+    if (options.tcp && options.udp) {
+        fprintf(stderr, "Only one of --tcp and --udp may be specified\n");
+        exit(EXIT_FAILURE);
+    }
+    if (!options.tcp && !options.udp) {
+        /* Default to UDP */
+        options.udp = 1;
+    }
     return options;
 }
 
 
 static void print_usage(const char* program) {
-    printf("Usage: %s [OPTION]\n", program);
+    printf("Usage: %s [OPTIONS]\n", program);
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
     printf("-v, --verbose  Print more debugging information.\n");
+    printf("-t, --tcp      Listen for messages on a TCP connection.\n");
+    printf("-u, --udp      Listen for messages on a UDP connection.\n");
 }
