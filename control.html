@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Raspberry Pi RC controller</title>
+</head>
+
+<body id="body">
+    <h1>Pi-RC controller</h1>
+    <h2>Server</h2>
+    <table>
+        <tr>
+            <td>Server address</td>
+            <td>
+                <input id="server-address" value="127.0.0.1" autocomplete="on"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Port</td>
+            <td>
+                <input id="port" type="number" value="12345"/>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="2">
+                <button id="connect">Connect</button>
+            </td>
+        </tr>
+    </table>
+
+    <h2>Controls</h2>
+    <label for="control-file">
+        <b>Load JSON control file</b>
+        <input id="control-file" name="control-file" type="file" accept="application/json"/>
+    </label>
+    <table>
+        <tr>
+            <td>Frequency</td>
+            <td>
+                <input id="frequency" type="number" min="10" max="100" step="0.005" value="40.0"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Synchronization burst microseconds</td>
+            <td>
+                <input id="sync-burst-us" type="number" min="50" max="10000" step="10" value="1200"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Synchronization spacing microseconds</td>
+            <td>
+                <input id="sync-spacing-us" type="number" min="50" max="10000" step="10" value="400"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Total synchronizations</td>
+            <td>
+                <input id="total-syncs" type="number" min="2" max="10" step="1" value="4"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Signal burst microseconds</td>
+            <td>
+                <input id="signal-burst-us" type="number" min="50" max="10000" step="10" value="400"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Signal spacing microseconds</td>
+            <td>
+                <input id="signal-spacing-us" type="number" min="50" max="10000" step="10" value="400"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Forward</td>
+            <td>
+                <input id="forward" type="number" min="5" max="100" step="1" value="11"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Forward left</td>
+            <td>
+                <input id="forward-left" type="number" min="5" max="100" step="1" value="27"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Forward right</td>
+            <td>
+                <input id="forward-right" type="number" min="5" max="100" step="1" value="33"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Reverse</td>
+            <td>
+                <input id="reverse" type="number" min="5" max="100" step="1" value="39"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Reverse left</td>
+            <td>
+                <input id="reverse-left" type="number" min="5" max="100" step="1" value="51"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Reverse right</td>
+            <td>
+                <input id="reverse-right" type="number" min="5" max="100" step="1" value="45"/>
+            </td>
+        </tr>
+    </table>
+
+    <script type="text/javascript" charset="utf-8">
+
+var socket = null;
+var optionToId = {
+    "frequency": "frequency",
+    "synchronization_burst_us": "sync-burst-us",
+    "synchronization_spacing_us": "sync-spacing-us",
+    "total_synchronizations": "total-syncs",
+    "signal_burst_us": "signal-burst-us",
+    "signal_spacing_us": "signal-spacing-us",
+    "total_synchronizations": "total-syncs"
+};
+var forward = reverse = false;
+var left = right = false;
+
+function loadFile(file) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+        try {
+            var json = JSON.parse(e.target.result);
+        } catch (error) {
+            alert("Unable to read JSON: " + error);
+            return;
+        }
+        for (var option in optionToId) {
+            if (optionToId.hasOwnProperty(option)) {
+                value = json[option];
+                if (value !== undefined) {
+                    document.getElementById(optionToId[option]).value = value;
+                }
+            }
+        }
+    };
+    reader.readAsText(file);
+}
+function handleFileSelect(evt) {
+    evt.preventDefault();
+    var file = evt.target.files[0];
+    loadFile(file);
+}
+function connect(evt) {
+    evt.preventDefault();
+    if (socket !== null) {
+        return;
+    }
+    var address = document.getElementById("server-address").value;
+    var port = document.getElementById("port").value;
+    socket = new WebSocket("ws://" + address + ":" + port);
+    socket.onerror = function (evt) {
+        alert("Unable to connect to the pi_pcm server; did you start it in TCP mode (--tcp)?");
+        socket.close();
+    };
+    socket.onclose = function (evt) {
+        socket = null;
+    };
+}
+function formatControlMessage() {
+    var frequency = parseFloat(document.getElementById("frequency").value);
+    var deadFrequency = frequency > 40 ? 26.995 : 49.830;
+
+    var command = [{
+        "frequency": frequency,
+        "dead_frequency": deadFrequency,
+        "burst_us": parseFloat(document.getElementById("sync-burst-us").value),
+        "spacing_us": parseInt(document.getElementById("sync-spacing-us").value),
+        "repeats": parseInt(document.getElementById("total-syncs").value)
+    }];
+
+    var forwardCount = forward ? 2 : reverse ? 0 : 1;
+    var leftCount = left ? 2 : right ? 0 : 1;
+    var burstIdLookup = [
+        ["reverse-right", "reverse", "reverse-left"],
+        ["", "", ""],  // Not moving
+        ["forward-right", "forward", "forward-left"]
+    ];
+    var burstId = burstIdLookup[forwardCount][leftCount];
+    if (burstId !== "") {
+        var burstSignals = parseInt(document.getElementById(burstId).value);
+        command.push({
+            "frequency": frequency,
+            "dead_frequency": deadFrequency,
+            "burst_us": parseFloat(document.getElementById("signal-burst-us").value),
+            "spacing_us": parseInt(document.getElementById("sync-spacing-us").value),
+            "repeats": burstSignals
+        });
+    }
+    return JSON.stringify(command);
+}
+function sendControlMessage(evt) {
+    if (evt !== undefined) {
+        evt.preventDefault();
+    }
+    if (socket !== null) {
+        socket.send(formatControlMessage());
+    }
+}
+function keyHandler(evt, down) {
+    evt = evt || window.evt;
+    var key = evt.key || evt.which || evt.keyCode;
+    var needUpdate = false;  // We'll use this to ignore key repeats
+
+    if (key === 38) {  // Up
+        needUpdate = (forward !== down);
+        forward = down;
+    } else if (key === 40) {  // Down
+        needUpdate = (reverse !== down);
+        reverse = down;
+    } else if (key === 37) {  // Left
+        needUpdate = (left !== down);
+        left = down;
+    } else if (key === 39) {  // Right
+        needUpdate = (right !== down);
+        right = down;
+    }
+    if (needUpdate) {
+        sendControlMessage();
+    }
+}
+
+document.getElementById("control-file").addEventListener("change", handleFileSelect);
+document.getElementById("connect").addEventListener("click", connect);
+var body = document.getElementById("body");
+body.addEventListener("keyup", function (evt) { keyHandler(evt, false); });
+body.addEventListener("keydown", function (evt) { keyHandler(evt, true); });
+
+    </script>
+
+</body>
+</html>
