@@ -60,8 +60,8 @@ def load_configuration(configuration_file):
 def interactive_control(host, port, configuration):
     """Runs the interactive control."""
     cad.lcd.backlight_off() # Save power. Useful for battery projects.
-    controlname = 'Pi-RC - 2: Quit'
-    cad.lcd.write(controlname + "\n0L,1LED,5A,  4:R")
+    controlname = 'Pi-RC - 2Q, 3RE'
+    cad.lcd.write(controlname + "\n0L,1LED,5A,   4R")
     cad.lcd.cursor_off()
     globals()['sock'] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     globals()['host'] = host
@@ -85,22 +85,29 @@ def interactive_control(host, port, configuration):
                 time.sleep(1)
         if cad.switches[6].value == 1:
             operation = 'reverse'
-        elif cad.switches[7].value == 1:
-            operation = 'forward'
+        else:
+			if cad.switches[7].value == 1:
+				operation = 'forward'
+			elif cad.switches[3].value == 1:
+				operation = 'reverse'
         if cad.switches[2].value == 1:
+			# command is currently idle.
             sock.sendto(configuration[command], (host, port))
             exit()
-        elif cad.switches[5].value == 1:
-            command = operation
-        if command == 'forward' or command == 'reverse':
-            if cad.switches[0].value == 1:
-                command += '_left'
-            elif cad.switches[4].value == 1:
-                command += '_right'
-        if not command == currentcommand:
-            # Avoid causing pi_pcm from crashing.
-            currentcommand = command
-            sock.sendto(configuration[command], (host, port))
+        else:
+			if cad.switches[5].value == 1:
+				command = operation
+			elif cad.switches[3].value == 1:
+				command = operation
+			if command == 'forward' or command == 'reverse':
+				if cad.switches[0].value == 1:
+					command += '_left'
+				elif cad.switches[4].value == 1:
+					command += '_right'
+			if not command == currentcommand:
+				# Avoid causing pi_pcm from crashing.
+				currentcommand = command
+				sock.sendto(configuration[command], (host, port))
 
 
 def make_parser():
