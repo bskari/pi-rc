@@ -1,0 +1,17 @@
+{
+    "name": "jsbr Ford Mustang",
+    "description": "Ford Mustang, 27MHz, No. 23819",
+    "frequency": 27.0,
+    "synchronization_burst_us": 1200,
+    "synchronization_spacing_us": 400,
+    "total_synchronizations": 4,
+    "signal_burst_us": 400,
+    "signal_spacing_us": 400,
+
+    "forward": 11,
+    "forward_left": 27,
+    "forward_right": 33,
+    "reverse": 39,
+    "reverse_left": 51,
+    "reverse_right": 45
+}
