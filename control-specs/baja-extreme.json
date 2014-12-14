@@ -1,0 +1,17 @@
+{
+    "name": "New Bright Baja Extreme",
+    "description": "New Bright 1:14 Ram, Baja Extreme, Red; 6.4V Lithium battery",
+    "frequency": 49.83,
+    "synchronization_burst_us": 1500,
+    "synchronization_spacing_us": 500,
+    "total_synchronizations": 4,
+    "signal_burst_us": 500,
+    "signal_spacing_us": 500,
+
+    "forward": 40,
+    "forward_left": 46,
+    "forward_right": 52,
+    "reverse": 10,
+    "reverse_left": 34,
+    "reverse_right": 28
+}
