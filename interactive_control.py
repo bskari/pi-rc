@@ -41,9 +41,11 @@ def load_configuration(configuration_file):
         'forward',
         'forward_left',
         'forward_right',
+        'left',
         'reverse',
         'reverse_left',
         'reverse_right',
+        'right',
     ):
         command_dict = base_command.copy()
         command_dict['repeats'] = configuration[key]
@@ -119,17 +121,19 @@ def interactive_control(host, port, configuration):
         if change:
             # Something changed, so send a new command
             command = 'idle'
-            if up or down:
-                if up:
-                    command = 'forward'
-                else:
-                    command = 'reverse'
+            if up:
+                command = 'forward'
+            elif down:
+                command = 'reverse'
 
-                if left:
-                    command += '_left'
-                elif right:
-                    command += '_right'
+            append = lambda x: command + '_' + x if command != 'idle' else x
 
+            if left:
+                command = append('left')
+            elif right:
+                command = append('right')
+
+            print(command)
             sock.sendto(configuration[command], (host, port))
 
             # Show the command and JSON

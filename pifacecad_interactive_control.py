@@ -39,6 +39,8 @@ def load_configuration(configuration_file):
         'reverse',
         'reverse_left',
         'reverse_right',
+        'left',
+        'right',
     ):
         command_dict = base_command.copy()
         command_dict['repeats'] = configuration[key]
@@ -99,11 +101,12 @@ def interactive_control(host, port, configuration):
                 command = operation
             elif cad.switches[3].value == 1:
                 command = operation
-            if command == 'forward' or command == 'reverse':
-                if cad.switches[0].value == 1:
-                    command += '_left'
-                elif cad.switches[4].value == 1:
-                    command += '_right'
+
+            append = lambda x: command + '_' + x if command != 'idle' else x
+            if cad.switches[0].value == 1:
+                command = append('left')
+            elif cad.switches[4].value == 1:
+                command = append('right')
             if not command == currentcommand:
                 # Avoid causing pi_pcm from crashing.
                 currentcommand = command

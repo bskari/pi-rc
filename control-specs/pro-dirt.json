@@ -11,7 +11,9 @@
     "forward": 40,
     "forward_left": 46,
     "forward_right": 52,
+    "left": 64,
     "reverse": 10,
     "reverse_left": 34,
-    "reverse_right": 28
+    "reverse_right": 28,
+    "right": 58
 }
