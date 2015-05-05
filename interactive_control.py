@@ -134,7 +134,11 @@ def interactive_control(host, port, configuration):
                 command = append('right')
 
             print(command)
-            sock.sendto(configuration[command], (host, port))
+            try:
+                sock.sendto(configuration[command], (host, port))
+            except TypeError:
+                # Windows + Python 3 workaround?
+                sock.sendto(bytes(configuration[command]), (host, port))
 
             # Show the command and JSON
             background.fill(black)
