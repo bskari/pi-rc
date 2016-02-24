@@ -98,6 +98,8 @@
  * CB is pointed.
  */
 
+#define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
+
 #define NUM_SAMPLES     4000
 #define NUM_CBS         (NUM_SAMPLES * 2)
 
@@ -115,14 +117,14 @@
 #define DMA_CONBLK_AD       (0x04/4)
 #define DMA_DEBUG       (0x20/4)
 
-#define DMA_BASE        0x20007000
-#define DMA_LEN         0x24
-#define PWM_BASE        0x2020C000
-#define PWM_LEN         0x28
-#define CLK_BASE            0x20101000
-#define CLK_LEN         0xA8
-#define GPIO_BASE       0x20200000
-#define GPIO_LEN        0xB4
+#define DMA_OFFSET  0x7000
+#define DMA_LEN     0x24
+#define PWM_OFFSET  0x20C000
+#define PWM_LEN     0x28
+#define CLK_OFFSET  0x101000
+#define CLK_LEN     0xA8
+#define GPIO_OFFSET 0x200000
+#define GPIO_LEN    0xB4
 
 #define PWM_CTL         (0x00/4)
 #define PWM_DMAC        (0x08/4)
@@ -223,6 +225,7 @@ static int parse_json(
     int* request_response
 );
 static void free_command(struct command_node_t* command);
+static int get_pi_version(void);
 #define BYTE unsigned char
 #define WORD unsigned int
 struct SHA1_CTX {
@@ -245,6 +248,17 @@ int main(int argc, char** argv) {
     struct pi_options options = get_args(argc, argv);
     int i, mem_fd, pid;
     char pagemap_fn[64];
+
+    unsigned int dma_base;
+    const int pi_version = get_pi_version();
+    if (pi_version == 2) {
+        dma_base = 0x3F000000;
+    } else if (pi_version == 1) {
+        dma_base = 0x20000000;
+    } else {
+        fprintf(stderr, "Unable to find Pi version\n");
+        return -1;
+    }
 
     struct sigaction sa;
     /**
@@ -270,10 +284,10 @@ int main(int argc, char** argv) {
     /* The fractional part is stored in the lower 12 bits */
     float frequency = 49.830;
 
-    dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
-    pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
-    clk_reg = map_peripheral(CLK_BASE, CLK_LEN);
-    gpio_reg = map_peripheral(GPIO_BASE, GPIO_LEN);
+    dma_reg = map_peripheral(dma_base + DMA_OFFSET, DMA_LEN);
+    pwm_reg = map_peripheral(dma_base + PWM_OFFSET, PWM_LEN);
+    clk_reg = map_peripheral(dma_base + CLK_OFFSET, CLK_LEN);
+    gpio_reg = map_peripheral(dma_base + GPIO_OFFSET, GPIO_LEN);
 
     virtbase = mmap(
         NULL,
@@ -1244,4 +1258,26 @@ base64_encode(unsigned char *in, int inlen, char *out)
     }
 
     return j;
+}
+
+
+int get_pi_version() {
+    FILE* const cpu_info = fopen("/proc/cpuinfo", "r");
+    if (cpu_info == NULL) {
+        return -1;
+    }
+    char buffer[120];
+    while (fgets(buffer, COUNT_OF(buffer), cpu_info) != NULL) {
+        if (strncmp("Revision", buffer, 8) == 0) {
+            if (strstr(buffer, "a21041") != NULL) {
+                // Pi 2
+                return 2;
+            }
+            // TODO: Find out what this value is on the Pi 1 and check for it
+            // explicitly
+            return 1;
+        }
+    }
+    return -1;
+    fclose(cpu_info);
 }
