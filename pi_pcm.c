@@ -80,6 +80,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "mailbox.h"
+#define MBFILE            DEVICE_FILE_NAME    /* From mailbox.h */
+
 /**
  * RC commands are almost always sent at some multiple of 5 us.  The basic idea
  * is to maintain a buffer of 4000 values to write to the clock control
@@ -98,6 +101,20 @@
  * CB is pointed.
  */
 
+#if (RASPI)==1
+#define PERIPH_VIRT_BASE 0x20000000
+#define PERIPH_PHYS_BASE 0x7e000000
+#define DRAM_PHYS_BASE 0x40000000
+#define MEM_FLAG 0x0c
+#elif (RASPI)==2
+#define PERIPH_VIRT_BASE 0x3f000000
+#define PERIPH_PHYS_BASE 0x7e000000
+#define DRAM_PHYS_BASE 0xc0000000
+#define MEM_FLAG 0x04
+#else
+#error Unknown Raspberry Pi version (variable RASPI)
+#endif
+
 #define NUM_SAMPLES     4000
 #define NUM_CBS         (NUM_SAMPLES * 2)
 
@@ -115,13 +132,21 @@
 #define DMA_CONBLK_AD       (0x04/4)
 #define DMA_DEBUG       (0x20/4)
 
-#define DMA_BASE        0x20007000
+#define DMA_BASE_OFFSET        0x00007000
+#define PWM_BASE_OFFSET        0x0020C000
+#define CLK_BASE_OFFSET            0x00101000
+#define GPIO_BASE_OFFSET    0x00200000
+
+#define DMA_VIRT_BASE        (PERIPH_VIRT_BASE + DMA_BASE_OFFSET)
+#define PWM_VIRT_BASE        (PERIPH_VIRT_BASE + PWM_BASE_OFFSET)
+#define CLK_VIRT_BASE        (PERIPH_VIRT_BASE + CLK_BASE_OFFSET)
+#define GPIO_VIRT_BASE        (PERIPH_VIRT_BASE + GPIO_BASE_OFFSET)
+
+#define PWM_PHYS_BASE        (PERIPH_PHYS_BASE + PWM_BASE_OFFSET)
+
 #define DMA_LEN         0x24
-#define PWM_BASE        0x2020C000
 #define PWM_LEN         0x28
-#define CLK_BASE            0x20101000
 #define CLK_LEN         0xA8
-#define GPIO_BASE       0x20200000
 #define GPIO_LEN        0xB4
 
 #define PWM_CTL         (0x00/4)
@@ -158,10 +183,13 @@ struct dma_cb_t {
              stride, next, pad[2];
 };
 
+#define BUS_TO_PHYS(x) ((x)&~0xC0000000)
+
 struct page_map_t {
     uint8_t* virtaddr;
     uint32_t physaddr;
 };
+
 
 struct command_node_t {
     float burst_us;
@@ -175,7 +203,12 @@ struct command_node_t {
 
 struct page_map_t* page_map;
 
-static uint8_t* virtbase;
+static struct {
+    int handle;            /* From mbox_open() */
+    unsigned mem_ref;    /* From mem_alloc() */
+    unsigned bus_addr;    /* From mem_lock() */
+    uint8_t *virt_addr;    /* From mapmem() */
+} mbox;
 
 static volatile uint32_t* pwm_reg;
 static volatile uint32_t* clk_reg;
@@ -243,8 +276,7 @@ void decode_websocket_message(char message[]);
 
 int main(int argc, char** argv) {
     struct pi_options options = get_args(argc, argv);
-    int i, mem_fd, pid;
-    char pagemap_fn[64];
+    int i;
 
     struct sigaction sa;
     /**
@@ -270,60 +302,28 @@ int main(int argc, char** argv) {
     /* The fractional part is stored in the lower 12 bits */
     float frequency = 49.830;
 
-    dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
-    pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
-    clk_reg = map_peripheral(CLK_BASE, CLK_LEN);
-    gpio_reg = map_peripheral(GPIO_BASE, GPIO_LEN);
+    dma_reg = map_peripheral(DMA_VIRT_BASE, DMA_LEN);
+    pwm_reg = map_peripheral(PWM_VIRT_BASE, PWM_LEN);
+    clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
+    gpio_reg = map_peripheral(GPIO_VIRT_BASE, GPIO_LEN);
 
-    virtbase = mmap(
-        NULL,
-        NUM_PAGES * PAGE_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_SHARED | MAP_ANONYMOUS | MAP_NORESERVE | MAP_LOCKED,
-        -1,
-        0);
-    if (virtbase == MAP_FAILED) {
-        fatal("Failed to mmap physical pages: %m\n");
+    mbox.handle = mbox_open();
+    if (mbox.handle < 0)
+        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
+    printf("Allocating physical memory: size = %d     ", NUM_PAGES * 4096);
+    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
+        fatal("Could not allocate memory.\n");
     }
-    if ((unsigned long)virtbase & (PAGE_SIZE - 1)) {
-        fatal("Virtual address is not page aligned\n");
+    // TODO: How do we know that succeeded?
+    printf("mem_ref = %u     ", mbox.mem_ref);
+    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
+        fatal("Could not lock memory.\n");
     }
-    if (options.verbose) {
-        printf("Virtual memory mapped at %p\n", virtbase);
+    printf("bus_addr = %x     ", mbox.bus_addr);
+    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
+        fatal("Could not map memory.\n");
     }
-    page_map = malloc(NUM_PAGES * sizeof(*page_map));
-    if (page_map == 0) {
-        fatal("Failed to malloc page_map: %m\n");
-    }
-    pid = getpid();
-    snprintf(
-        pagemap_fn,
-        sizeof(pagemap_fn) / sizeof(pagemap_fn[0]),
-        "/proc/%d/pagemap",
-        pid);
-    mem_fd = open(pagemap_fn, O_RDONLY);
-    if (mem_fd < 0) {
-        fatal("Failed to open %s: %m\n", pagemap_fn);
-    }
-    if (
-        lseek(mem_fd, (unsigned long)virtbase >> 9, SEEK_SET)
-        != (off_t)((unsigned long)virtbase >> 9)
-    ) {
-        fatal("Failed to seek on %s: %m\n", pagemap_fn);
-    }
-    for (i = 0; i < NUM_PAGES; i++) {
-        uint64_t pfn;
-        page_map[i].virtaddr = virtbase + i * PAGE_SIZE;
-        /* Following line forces page to be allocated */
-        page_map[i].virtaddr[0] = 0;
-        if (read(mem_fd, &pfn, sizeof(pfn)) != sizeof(pfn)) {
-            fatal("Failed to read %s: %m\n", pagemap_fn);
-        }
-        if (((pfn >> 55) & 0xfbf) != 0x10c) { /* pagemap bits: https://www.kernel.org/doc/Documentation/vm/pagemap.txt */
-            fatal("Page %d not present (pfn 0x%016llx)\n", i, pfn);
-        }
-        page_map[i].physaddr = (uint32_t)pfn << PAGE_SHIFT | 0x40000000;
-    }
+    printf("virt_addr = %p\n", mbox.virt_addr);
 
     /* GPIO4 needs to be ALT FUNC 0 to otuput the clock */
     gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 12)) | (4 << 12);
@@ -333,10 +333,10 @@ int main(int argc, char** argv) {
     udelay(100);
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;
 
-    ctl = (struct control_data_s*)virtbase;
+    ctl = (struct control_data_s*)mbox.virt_addr;
     struct dma_cb_t* cbp = ctl->cb;
     uint32_t phys_sample_dst = CM_GP0DIV;
-    uint32_t phys_pwm_fifo_addr = 0x7e20c000 + 0x18;
+    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
 
     const int frequency_control = frequency_to_control(frequency);
     for (i = 0; i < NUM_SAMPLES; i++) {
@@ -351,7 +351,7 @@ int main(int argc, char** argv) {
         cbp++;
         /* Delay */
         cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
-        cbp->src = mem_virt_to_phys(virtbase);
+        cbp->src = mem_virt_to_phys(mbox.virt_addr);
         cbp->dst = phys_pwm_fifo_addr;
         cbp->length = 4;
         cbp->stride = 0;
@@ -359,7 +359,7 @@ int main(int argc, char** argv) {
         cbp++;
     }
     cbp--;
-    cbp->next = mem_virt_to_phys(virtbase);
+    cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
     /**
      * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
@@ -645,28 +645,14 @@ static void fatal(char* fmt, ...) {
 
 
 static uint32_t mem_virt_to_phys(void* virt) {
-    uint32_t offset = (uint8_t*)virt - virtbase;
-
-    return page_map[offset >> PAGE_SHIFT].physaddr + (offset % PAGE_SIZE);
+    uint32_t offset = (uint8_t*)virt - mbox.virt_addr;
+    return mbox.bus_addr + offset;
 }
 
 
 static uint32_t mem_phys_to_virt(uint32_t phys) {
-    uint32_t pg_offset = phys & (PAGE_SIZE - 1);
-    uint32_t pg_addr = phys - pg_offset;
-    int i;
-
-    for (i = 0; i < NUM_PAGES; i++) {
-        if (page_map[i].physaddr == pg_addr) {
-            return (uint32_t)virtbase + i * PAGE_SIZE + pg_offset;
-        }
-    }
-    fatal("Failed to reverse map phys addr %08x\n", phys);
-
-    return 0;
+  return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
 }
-
-
 
 static void* map_peripheral(uint32_t base, uint32_t len) {
     int fd = open("/dev/mem", O_RDWR);
@@ -714,8 +700,8 @@ int fill_buffer(
         last_cb = (uint32_t)ctl->cb;
     }
     const uint32_t cur_cb = mem_phys_to_virt(dma_reg_[DMA_CONBLK_AD]);
-    int last_sample = (last_cb - (uint32_t)virtbase) / (sizeof(struct dma_cb_t) * 2);
-    const int this_sample = (cur_cb - (uint32_t)virtbase) / (sizeof(struct dma_cb_t) * 2);
+    int last_sample = (last_cb - (uint32_t)mbox.virt_addr) / (sizeof(struct dma_cb_t) * 2);
+    const int this_sample = (cur_cb - (uint32_t)mbox.virt_addr) / (sizeof(struct dma_cb_t) * 2);
     int free_slots = this_sample - last_sample;
 
     if (free_slots < 0) {
@@ -765,7 +751,7 @@ int fill_buffer(
             last_sample = 0;
         }
     }
-    last_cb = (uint32_t)virtbase + last_sample * sizeof(struct dma_cb_t) * 2;
+    last_cb = (uint32_t)mbox.virt_addr + last_sample * sizeof(struct dma_cb_t) * 2;
     return nodes_processed;
 }
 
