@@ -21,6 +21,7 @@ diagram](http://upload.wikimedia.org/wikipedia/commons/9/97/Raspberrypi_pcb_over
 to act as an antenna and compile the `pi_pcm` program on your Raspberry Pi and
 run it as root:
 
+    apt-get -y install scons libjansson-dev
     scons
     su
     ./pi_pcm
