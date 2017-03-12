@@ -209,16 +209,16 @@ function keyHandler(evt, down) {
     var key = evt.key || evt.which || evt.keyCode;
     var needUpdate = false;  // We'll use this to ignore key repeats
 
-    if (key === 38) {  // Up
+      if (key === "ArrowUp" || 38) {  // Up
         needUpdate = (forward !== down);
         forward = down;
-    } else if (key === 40) {  // Down
+    } else if (key === "ArrowDown" || 40) {  // Down
         needUpdate = (reverse !== down);
         reverse = down;
-    } else if (key === 37) {  // Left
+    } else if (key === "ArrowLeft" || 37) {  // Left
         needUpdate = (left !== down);
         left = down;
-    } else if (key === 39) {  // Right
+    } else if (key === "ArrowRight" || 39) {  // Right
         needUpdate = (right !== down);
         right = down;
     }
