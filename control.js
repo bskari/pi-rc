@@ -95,19 +95,19 @@ function sendControlMessage(evt) {
 }
 function keyHandler(evt, down) {
     evt = evt || window.evt;
-    var key = evt.key || evt.which || evt.keyCode;
+    //var key = evt.key || evt.which || evt.keyCode;
     var needUpdate = false;  // We'll use this to ignore key repeats
 
-      if (key === "ArrowUp" || 38) {  // Up
+      if (evt.key === "ArrowUp" || evt.keyCode === 38) {  // Up
         needUpdate = (forward !== down);
         forward = down;
-    } else if (key === "ArrowDown" || 40) {  // Down
+    } else if (evt.key === "ArrowDown" || evt.keyCode === 40) {  // Down
         needUpdate = (reverse !== down);
         reverse = down;
-    } else if (key === "ArrowLeft" || 37) {  // Left
+    } else if (evt.key === "ArrowLeft" || evt.keyCode === 37) {  // Left
         needUpdate = (left !== down);
         left = down;
-    } else if (key === "ArrowRight" || 39) {  // Right
+    } else if (evt.key === "ArrowRight" || evt.keyCode === 39) {  // Right
         needUpdate = (right !== down);
         right = down;
     }
