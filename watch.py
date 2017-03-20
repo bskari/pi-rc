@@ -362,15 +362,18 @@ movement. When it does, hit <Ctrl> + C and use the last printed values.
             )
             sys.exit(1)
         if not webcam and not raspi_camera:
-            # Find which to use
-            raspi_exists = subprocess.call(
-                ('/usr/bin/which', 'raspistill'),
-                stdout=open('/dev/null', 'w')
-            )
-            if raspi_exists == 0:
-                raspi_camera = True
-            else:
+            if os.name != 'posix':
                 raspi_camera = False
+            else:
+                # Find which to use
+                raspi_exists = subprocess.call(
+                    ('/usr/bin/which', 'raspistill'),
+                    stdout=open('/dev/null', 'w')
+                )
+                if raspi_exists == 0:
+                    raspi_camera = True
+                else:
+                    raspi_camera = False
             webcam = not raspi_camera
 
     # RC cars in the 27 and 49 MHz spectrum typically operate on one of a
