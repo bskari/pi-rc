@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Webcam monitor</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+    box-sixing: border-box;
+}
+
+.content-area {
+    text-align: center;
+    font-size: 16px;
+    font-family: "Lucida Grande", "Arial", sans-serif;
+}
+
+#video {
+    display: none;
+}
+
+#photo {
+    border: 1px solid black;
+    box-shadow: 2px 2px 3px black;
+    width: 320px;
+    height: 240px;
+}
+
+#canvas {
+   display: none;
+}
+
+#output {
+    width: 340px;
+    height: 260px;
+    display: inline-block;
+}
+
+#controls {
+    display: inline-block;
+}
+</style>
+<script>
+(() => {
+    let width = 320;
+    let height = 0; // This will be computed based on the input stream
+
+    let streaming = false;
+    let video = null;
+    let canvas = null;
+    let startButton = null;
+    let pictureRepeatId = null;
+
+    function startUp() {
+        video = document.getElementById('video');
+        canvas = document.getElementById('canvas');
+        startButton = document.getElementById('start-button');
+
+        navigator.mediaDevices.getUserMedia(
+            {video: true, audio: false}
+        ).then((stream) => {
+            if (navigator.mozGetUserMedia) {
+                video.mozSrcObject = stream;
+            } else {
+                const vendorUrl = window.URL || window.webkitURL;
+                video.src = vendorUrl.createObjectURL(stream);
+            }
+            video.play();
+        }).catch((error) => {
+            alert('An error occurred: ' + error);
+        });
+
+        video.addEventListener('canplay', (event) => {
+            if (!streaming) {
+                height = video.videoHeight / (video.videoWidth / width);
+
+                // Work around Firefox bug
+                if (isNaN(height)) {
+                    height = width / (4 / 3);
+                }
+
+                video.setAttribute('width', width);
+                video.setAttribute('height', height);
+                canvas.setAttribute('width', width);
+                canvas.setAttribute('height', height);
+                streaming = true;
+            }
+        }, false);
+
+        startButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            if (pictureRepeatId === null) {
+                pictureRepeatId = setInterval(takePicture, 1000);
+            } else {
+                clearInterval(pictureRepeatId);
+                pictureRepeatId = null;
+            }
+        }, false);
+
+        clearPhoto();
+
+    }
+
+    function clearPhoto() {
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#AAA';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        let data = canvas.toDataURL('image/png');
+        photo.setAttribute('src', data);
+    }
+
+    function takePicture() {
+        const context = canvas.getContext('2d');
+        if (width && height) {
+            canvas.width = width;
+            canvas.height = height;
+            context.drawImage(video, 0, 0, width, height);
+
+            let data = canvas.toDataURL('image/png');
+            photo.setAttribute('src', data);
+        } else {
+            clearPhoto();
+        }
+    }
+
+    window.addEventListener('load', startUp, false);
+})();
+</script>
+<body>
+<div class="content-area">
+    <h1>RC monitor</h1>
+    <div>
+        <video id="video">Sorry, no video stream is available</video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <div id="controls">
+        <label for="frequency">Frequency MHz</label>
+        <select id="frequency">
+            <option value="26.995">26.995</option>
+            <option value="27.045">27.045</option>
+            <option value="27.095">27.095</option>
+            <option value="27.145">27.145</option>
+            <option value="27.195">27.195</option>
+            <option value="27.255">27.255</option>
+            <option value="all-27">All 27</option>
+            <option value="49.830">49.830</option>
+            <option value="49.845">49.845</option>
+            <option value="49.860">49.860</option>
+            <option value="49.875">49.875</option>
+            <option value="49.890">49.890</option>
+            <option value="all-49">All 49</option>
+        </select>
+        <button id="start-button">Begin monitoring</button>
+    </div>
+    <div id="output">
+        <img id="photo" alt="The screen capture that will appear in this box.">
+    </div>
+</div>
+</body>
+</html>
