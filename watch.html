@@ -5,39 +5,54 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
+* {
+    box-sizing: border-box;
+}
 body {
-    box-sixing: border-box;
+    font-family: sans-serif;
+    line-height: 1.15;
+    margin: 0;
 }
-
-.content-area {
-    text-align: center;
-    font-size: 16px;
-    font-family: "Lucida Grande", "Arial", sans-serif;
+.content {
+    display: table;
+    max-width: 48rem;
+    text-align: left;
 }
-
-#video {
+.center {
+    margin: 0 auto;
+}
+.header {
+    font-size: 1.5rem;
+    display: table-cell;
+}
+.label {
+    float: left;
+    padding: .25rem;
+    text-align: right;
+    width: 50%;
+}
+.value {
+    float: left;
+    padding: .25rem;
+    text-align: left;
+    width: 50%;
+}
+.button {
+    opacity: 1;
+    font-size: .875rem;
+    margin-bottom: .5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-top: .5rem;
+    padding-bottom: .5rem;
+    background-color: #000;
+    color: #fff;
+    text-decoration: none;
+    display: inline-block;
+    border-radius: .25rem;
+}
+.hidden {
     display: none;
-}
-
-#photo {
-    border: 1px solid black;
-    box-shadow: 2px 2px 3px black;
-    width: 320px;
-    height: 240px;
-}
-
-#canvas {
-   display: none;
-}
-
-#output {
-    width: 340px;
-    height: 260px;
-    display: inline-block;
-}
-
-#controls {
-    display: inline-block;
 }
 </style>
 <script>
@@ -87,55 +102,120 @@ body {
             }
         }, false);
 
-        startButton.addEventListener('click', (event) => {
-            event.preventDefault();
-            if (pictureRepeatId === null) {
-                pictureRepeatId = setInterval(takePicture, 1000);
+        setTimeout(function() {
+        navigator.mediaDevices.getUserMedia(userMediaOptions).then(function (stream) {
+            if(navigator.mozGetUserMedia) {
+                console.log('Setting');
+                video.mozSrcObject = stream;
             } else {
-                clearInterval(pictureRepeatId);
-                pictureRepeatId = null;
+                var url = window.URL || window.webkitURL;
+                video.src = url.createObjectURL(stream);
             }
+        }).catch(function (error) {
+            alert(error);
+        });
+        }, 1000);
+
+        monitorButton.addEventListener('click', function(event) {
+            event.preventDefault();
+            toggleMonitoring();
         }, false);
 
         clearPhoto();
+    }
 
+    function toggleMonitoring(state) {
+        if (state === undefined) {
+            state = sendSignals;
+        }
+        sendSignals = !state;
+
+        if (sendSignals) {
+            monitorButton.text = 'Stop monitoring';
+        } else {
+            monitorButton.text = 'Start monitoring';
+        }
     }
 
     function clearPhoto() {
-        const context = canvas.getContext('2d');
+        var context = canvas.getContext('2d');
         context.fillStyle = '#AAA';
         context.fillRect(0, 0, canvas.width, canvas.height);
 
-        let data = canvas.toDataURL('image/png');
+        var data = canvas.toDataURL('image/png');
         photo.setAttribute('src', data);
     }
 
     function takePicture() {
-        const context = canvas.getContext('2d');
+        console.log('takePicture');
+        var context = canvas.getContext('2d');
         if (width && height) {
             canvas.width = width;
             canvas.height = height;
             context.drawImage(video, 0, 0, width, height);
 
-            let data = canvas.toDataURL('image/png');
+            var data = canvas.toDataURL('image/png');
             photo.setAttribute('src', data);
         } else {
             clearPhoto();
         }
+        if (sendSignals) {
+            // TODO
+        }
+    }
+
+    function nextCommand() {
+        signalRepeats += 1;
+        if (signalRepeats > 50) {
+            signalRepeats = 5;
+            syncRepeats += 1;
+        }
+        if (syncRepeats > 7) {
+            syncRepeats = 2;
+            syncMultiplier += 1;
+        }
+        if (syncMultiplier > 7) {
+            syncMultiplier = 2;
+            useconds += 100;
+        }
+        if (useconds > 1201) {
+            // Nothing more to do, reset everything
+            useconds = 100;
+            syncMultiplier = 2;
+            syncRepeats = 2;
+            signalRepeats = 5;
+            toggleMonitoring(false);
+        }
+
+        document.getElementById('useconds').value = useconds;
+        document.getElementById('sync-multiplier').value = syncMultiplier;
+        document.getElementById('sync-repeats').value = syncRepeats;
+        document.getElementById('signal-repeats').value = signalRepeats;
     }
 
     window.addEventListener('load', startUp, false);
 })();
 </script>
 <body>
-<div class="content-area">
-    <h1>RC monitor</h1>
+<div class="content center">
     <div>
+        <header class="header center">
+            <h1>RC monitor</h1>
+        </header>
+    </div>
+    <div class="hidden">
         <video id="video">Sorry, no video stream is available</video>
         <canvas id="canvas"></canvas>
     </div>
-    <div id="controls">
+    <div>
+        <img id="photo" alt="The screen capture that will appear in this box.">
+    </div>
+</div>
+<div>
+    <div class="label">
         <label for="frequency">Frequency MHz</label>
+    </div>
+    <div class="value">
         <select id="frequency">
             <option value="26.995">26.995</option>
             <option value="27.045">27.045</option>
@@ -151,11 +231,34 @@ body {
             <option value="49.890">49.890</option>
             <option value="all-49">All 49</option>
         </select>
-        <button id="start-button">Begin monitoring</button>
     </div>
-    <div id="output">
-        <img id="photo" alt="The screen capture that will appear in this box.">
+    <div class="label">
+        <label for="useconds">Useconds</label>
     </div>
+    <div class="value">
+        <input id="useconds" class="parameter" disabled="disabled">
+    </div>
+    <div class="label">
+        <label for="sync-repeats">Sync repeats</label>
+    </div>
+    <div class="value">
+        <input id="sync-multiplier" class="parameter" disabled="disabled">
+    </div>
+    <div class="label">
+        <label for="sync-multiplier">Sync multiplier</label>
+    </div>
+    <div class="value">
+        <input id="sync-repeats" class="parameter" disabled="disabled">
+    </div>
+    <div class="label">
+        <label for="signal-repeats">Signal repeats</label>
+    </div>
+    <div class="value">
+        <input id="signal-repeats" class="parameter" disabled="disabled">
+    </div>
+</div>
+<div class="content center">
+    <a id="toggle-monitoring" class="button">Start monitoring</a>
 </div>
 </body>
 </html>
