@@ -56,36 +56,23 @@ body {
 }
 </style>
 <script>
-(() => {
-    let width = 320;
-    let height = 0; // This will be computed based on the input stream
+(function() {
+    var width = 320;
+    var height = 0; // This will be computed based on the input stream
 
-    let streaming = false;
-    let video = null;
-    let canvas = null;
-    let startButton = null;
-    let pictureRepeatId = null;
+    var streaming = false;
+    var video = null;
+    var canvas = null;
+    var monitorButton = null;
+    var pictureRepeatId = null;
+    var sendSignals = false;
 
     function startUp() {
         video = document.getElementById('video');
         canvas = document.getElementById('canvas');
-        startButton = document.getElementById('start-button');
+        monitorButton = document.getElementById('toggle-monitoring');
 
-        navigator.mediaDevices.getUserMedia(
-            {video: true, audio: false}
-        ).then((stream) => {
-            if (navigator.mozGetUserMedia) {
-                video.mozSrcObject = stream;
-            } else {
-                const vendorUrl = window.URL || window.webkitURL;
-                video.src = vendorUrl.createObjectURL(stream);
-            }
-            video.play();
-        }).catch((error) => {
-            alert('An error occurred: ' + error);
-        });
-
-        video.addEventListener('canplay', (event) => {
+        video.addEventListener('canplay', function(event) {
             if (!streaming) {
                 height = video.videoHeight / (video.videoWidth / width);
 
@@ -102,19 +89,24 @@ body {
             }
         }, false);
 
-        setTimeout(function() {
-        navigator.mediaDevices.getUserMedia(userMediaOptions).then(function (stream) {
-            if(navigator.mozGetUserMedia) {
-                console.log('Setting');
+        pictureRepeatId = setInterval(takePicture, 1000);
+
+        navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: 'environment',
+            },
+            audio: false
+        }).then(function(stream) {
+            if (navigator.mozGetUserMedia) {
                 video.mozSrcObject = stream;
             } else {
-                var url = window.URL || window.webkitURL;
-                video.src = url.createObjectURL(stream);
+                var vendorUrl = window.URL || window.webkitURL;
+                video.src = vendorUrl.createObjectURL(stream);
             }
-        }).catch(function (error) {
-            alert(error);
+            video.play();
+        }).catch(function(error) {
+            alert('An error occurred: ' + error);
         });
-        }, 1000);
 
         monitorButton.addEventListener('click', function(event) {
             event.preventDefault();
@@ -147,7 +139,6 @@ body {
     }
 
     function takePicture() {
-        console.log('takePicture');
         var context = canvas.getContext('2d');
         if (width && height) {
             canvas.width = width;
