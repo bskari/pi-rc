@@ -71,6 +71,7 @@ body {
         video = document.getElementById('video');
         canvas = document.getElementById('canvas');
         monitorButton = document.getElementById('toggle-monitoring');
+        previewButton = document.getElementById('start-preview');
 
         video.addEventListener('canplay', function(event) {
             if (!streaming) {
@@ -89,28 +90,15 @@ body {
             }
         }, false);
 
-        pictureRepeatId = setInterval(takePicture, 1000);
-
-        navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: 'environment',
-            },
-            audio: false
-        }).then(function(stream) {
-            if (navigator.mozGetUserMedia) {
-                video.mozSrcObject = stream;
-            } else {
-                var vendorUrl = window.URL || window.webkitURL;
-                video.src = vendorUrl.createObjectURL(stream);
-            }
-            video.play();
-        }).catch(function(error) {
-            alert('An error occurred: ' + error);
-        });
+        enumerateDevices();
 
         monitorButton.addEventListener('click', function(event) {
             event.preventDefault();
             toggleMonitoring();
+        }, false);
+        previewButton.addEventListener('click', function(event) {
+            event.preventDefault();
+            startPreview();
         }, false);
 
         clearPhoto();
@@ -184,6 +172,93 @@ body {
         document.getElementById('signal-repeats').value = signalRepeats;
     }
 
+    // This function should only be called once
+    function enumerateDevices() {
+        function removeCameraSelect() {
+            var container = document.getElementById('camera-container');
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            navigator.mediaDevices.enumerateDevices().then(function(devices) {
+                devices = devices.filter(function(device) {
+                    return device.kind === 'videoinput';
+                });
+                // If there's only one camera, just use it
+                if (devices.length <= 1) {
+                    removeCameraSelect();
+                    startPreview();
+                    return;
+                }
+                var cameraSelect = document.getElementById('camera-select');
+                devices.forEach(function(device, index) {
+                    var option = document.createElement('option');
+                    // Testing on Firefox on a laptop didn't have any labels
+                    if (device.label) {
+                        option.text = device.label;
+                    } else {
+                        option.text = 'Camera ' + (index + 1);
+                    }
+                    option.value = device.deviceId;
+                    cameraSelect.appendChild(option);
+                });
+            });
+        } else {
+            // Just hide the camera options
+            removeCameraSelect();
+            startPreview();
+        }
+    }
+
+    function getVideoDeviceSelector() {
+        var cameraSelect = document.getElementById('camera-select');
+        if (cameraSelect) {
+            return {deviceId: cameraSelect.value};
+        }
+        // Otherwise just grab any device
+        return true;
+    }
+
+    function startPreview() {
+        // I'd prefer to always use the environment facing camera. Firefox
+        // honors facingMode, iOS Safari doesn't, Android Chrome claims to but
+        // doesn't. Not sure about Opera. We'll just let the user choose an
+        // enumerated device, or use the only one.
+        var videoOptions = {
+            video: getVideoDeviceSelector(),
+            audio: false
+        };
+
+        function setVideoSource(stream) {
+            if (navigator.mozGetUserMedia) {
+                video.mozSrcObject = stream;
+            } else {
+                var vendorUrl = window.URL || window.webkitURL;
+                video.src = vendorUrl.createObjectURL(stream);
+            }
+            video.play();
+        }
+        function alertError(error) {
+            alert('An error occurred: ' + error);
+        }
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia(videoOptions).then(setVideoSource).catch(alertError);
+        } else {
+            var getUserMedia = (
+                navigator.getUserMedia ||
+                navigator.webkitGetUserMedia ||
+                navigator.mozGetUserMedia ||
+                navigator.msGetUserMedia);
+            if (getUserMedia === undefined) {
+                alert('This browser does not support video');
+            } else {
+                getUserMedia(videoOptions, setVideoSource, alertError);
+            }
+        }
+        pictureRepeatId = setInterval(takePicture, 1000);
+    }
+
     window.addEventListener('load', startUp, false);
 })();
 </script>
@@ -198,11 +273,23 @@ body {
         <video id="video">Sorry, no video stream is available</video>
         <canvas id="canvas"></canvas>
     </div>
-    <div>
+    <div class="center">
         <img id="photo" alt="The screen capture that will appear in this box.">
     </div>
 </div>
 <div>
+    <div id="camera-container">
+        <div class="label">
+            <label for="Camera">Camera</label>
+        </div>
+        <div class="value">
+            <select id="camera-select">
+            </select>
+        </div>
+        <div class="content center">
+            <a id="start-preview" class="button">Start camera preview</a>
+        </div>
+    </div>
     <div class="label">
         <label for="frequency">Frequency MHz</label>
     </div>
