@@ -1,7 +1,16 @@
 """Hosts files from the local directory using SSL."""
 import ssl
 import subprocess
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+import sys
+
+if sys.version_info.major < 3:
+    import SimpleHTTPServer
+    import SocketServer
+    Server = SocketServer.TCPServer
+    SimpleHTTPRequestHandler = SimpleHTTPServer.SimpleHTTPRequestHandler
+else:
+    from http.server import SimpleHTTPRequestHandler, HTTPServer
+    Server = HTTPServer
 
 def main():
     """Main."""
@@ -36,7 +45,7 @@ script will now generate a self-signed certificate.'''
 
     print('Starting server')
     server_address = ('0.0.0.0', 4443)
-    httpd = HTTPServer(server_address, SimpleHTTPRequestHandler)
+    httpd = Server(server_address, SimpleHTTPRequestHandler)
     httpd.socket = ssl.wrap_socket(
         httpd.socket,
         server_side=True,
