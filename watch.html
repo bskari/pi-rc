@@ -86,10 +86,12 @@ body {
     var countDownDiv = null;
     var monitorButton = null;
     var previewButton = null;
+    var imageChange = null;
     var pictureIntervalId = null;
     var countDownIntervalId = null;
     var countDown = 0;
     var sendSignals = false;
+    var referenceImage = null;
 
     function startUp() {
         video = document.getElementById('video');
@@ -97,6 +99,7 @@ body {
         monitorButton = document.getElementById('toggle-monitoring');
         previewButton = document.getElementById('start-preview');
         countDownDiv = document.getElementById('count-down');
+        imageChange = document.getElementById('image-change');
 
         video.addEventListener('canplay', function(event) {
             if (!streaming) {
@@ -162,22 +165,43 @@ body {
 
     function takePicture() {
         var context = canvas.getContext('2d');
+        var grayScaleImage;
         if (width && height) {
             canvas.width = width;
             canvas.height = height;
             context.drawImage(video, 0, 0, width, height);
-
+            var rawData = context.getImageData(0, 0, width, height);
+            grayScaleImage = grayScale(rawData);
+            context.putImageData(grayScaleImage, 0, 0);
             var data = canvas.toDataURL('image/png');
             photo.setAttribute('src', data);
         } else {
             clearPhoto();
         }
-        if (sendSignals) {
-            // TODO
+        if (sendSignals && referenceImage !== null) {
+            var difference = percentDifference(grayScaleImage, referenceImage);
+            imageChange.value = Math.round(difference * 100) * .01;
         }
     }
 
     function nextCommand() {
+        useconds = document.getElementById('useconds').value | 0;
+        syncRepeats = document.getElementById('sync-repeats').value | 0;
+        syncMultiplier = document.getElementById('sync-multiplier').value | 0;
+        signalRepeats = document.getElementById('signal-repeats').value | 0;
+        if (useconds < 100 || useconds > 1201) {
+            useconds = 100;
+        }
+        if (syncRepeats < 2 || syncRepeats > 7) {
+            syncRepeats = 2;
+        }
+        if (syncMultiplier < 2 || syncMultiplier > 7) {
+            syncMultiplier = 2;
+        }
+        if (signalRepeats < 5 || signalRepeats > 50) {
+            signalRepeats = 5;
+        }
+
         signalRepeats += 1;
         if (signalRepeats > 50) {
             signalRepeats = 5;
@@ -300,9 +324,51 @@ body {
             if (countDownIntervalId) {
                 clearInterval(countDownIntervalId);
             }
+            // Save the reference image
+            var context = canvas.getContext('2d');
+            var pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+            referenceImage = grayScale(pixels);
         } else {
             countDownDiv.children[0].children[0].textContent = countDown + '...';
         }
+    }
+
+    function grayScale(pixels) {
+        var limit = pixels.height * 4 * pixels.width;
+        // First, calculate the highest and lowest intensities so that we can
+        // scale it to avoid detecting lighting changes
+        var max = -100.0;
+        var min = 100.0;
+        for (var i = 0; i < limit; i += 4) {
+            var average = (pixels.data[i] + pixels.data[i + 1] + pixels.data[i + 2]) * .33333;
+            if (max < average) {
+                max = average;
+            } else if (min > average) {
+                min = average;
+            }
+        }
+        var scale = 1.0 / (max - min);
+        for (var i = 0; i < limit; i += 4) {
+            var average = (pixels.data[i] + pixels.data[i + 1] + pixels.data[i + 2]) * .33333;
+            var scaled = (average - min) * scale;
+            pixels.data[i] = average;
+            pixels.data[i + 1] = average;
+            pixels.data[i + 2] = average;
+        }
+        return pixels;
+    }
+
+    function percentDifference(pixels1, pixels2) {
+        var limit = pixels1.height * pixels1.width * 4;
+        var sumDifference = 0.0;
+        var test = false;
+        for (var i = 0; i < limit; i += 4) {
+            sumDifference += Math.abs(pixels1.data[i] - pixels2.data[i]);
+            sumDifference += Math.abs(pixels1.data[i + 1] - pixels2.data[i + 1]);
+            sumDifference += Math.abs(pixels1.data[i + 2] - pixels2.data[i + 2]);
+            // Skip alpha
+        }
+        return sumDifference / (pixels1.height * pixels1.width * 256 * 3) * 100;
     }
 
     window.addEventListener('load', startUp, false);
@@ -365,25 +431,31 @@ body {
         <label for="useconds">Useconds</label>
     </div>
     <div class="value">
-        <input id="useconds" class="parameter" disabled="disabled">
+        <input id="useconds" class="parameter" value="100">
     </div>
     <div class="label">
         <label for="sync-repeats">Sync repeats</label>
     </div>
     <div class="value">
-        <input id="sync-multiplier" class="parameter" disabled="disabled">
+        <input id="sync-repeats" class="parameter" value="2">
     </div>
     <div class="label">
         <label for="sync-multiplier">Sync multiplier</label>
     </div>
     <div class="value">
-        <input id="sync-repeats" class="parameter" disabled="disabled">
+        <input id="sync-multiplier" class="parameter" value="2">
     </div>
     <div class="label">
         <label for="signal-repeats">Signal repeats</label>
     </div>
     <div class="value">
-        <input id="signal-repeats" class="parameter" disabled="disabled">
+        <input id="signal-repeats" class="parameter" value="5">
+    </div>
+    <div class="label">
+        <label for="image-change">Image change %</label>
+    </div>
+    <div class="value">
+        <input id="image-change" class="parameter" disabled="disabled">
     </div>
 </div>
 <div class="content center">
