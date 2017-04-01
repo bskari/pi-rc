@@ -165,22 +165,21 @@ body {
 
     function takePicture() {
         var context = canvas.getContext('2d');
-        var grayScaleImage;
+        var rawData;
         if (width && height) {
             canvas.width = width;
             canvas.height = height;
             context.drawImage(video, 0, 0, width, height);
-            var rawData = context.getImageData(0, 0, width, height);
-            grayScaleImage = grayScale(rawData);
-            context.putImageData(grayScaleImage, 0, 0);
+            rawData = context.getImageData(0, 0, width, height);
+            context.putImageData(rawData, 0, 0);
             var data = canvas.toDataURL('image/png');
             photo.setAttribute('src', data);
         } else {
             clearPhoto();
         }
         if (sendSignals && referenceImage !== null) {
-            var difference = percentDifference(grayScaleImage, referenceImage);
-            imageChange.value = Math.round(difference * 100) * .01;
+            var difference = percentDifference(rawData, referenceImage);
+            imageChange.value = (difference + '').substring(0, 4);
         }
     }
 
@@ -327,35 +326,10 @@ body {
             // Save the reference image
             var context = canvas.getContext('2d');
             var pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-            referenceImage = grayScale(pixels);
+            referenceImage = pixels;
         } else {
             countDownDiv.children[0].children[0].textContent = countDown + '...';
         }
-    }
-
-    function grayScale(pixels) {
-        var limit = pixels.height * 4 * pixels.width;
-        // First, calculate the highest and lowest intensities so that we can
-        // scale it to avoid detecting lighting changes
-        var max = -100.0;
-        var min = 100.0;
-        for (var i = 0; i < limit; i += 4) {
-            var average = (pixels.data[i] + pixels.data[i + 1] + pixels.data[i + 2]) * .33333;
-            if (max < average) {
-                max = average;
-            } else if (min > average) {
-                min = average;
-            }
-        }
-        var scale = 1.0 / (max - min);
-        for (var i = 0; i < limit; i += 4) {
-            var average = (pixels.data[i] + pixels.data[i + 1] + pixels.data[i + 2]) * .33333;
-            var scaled = (average - min) * scale;
-            pixels.data[i] = average;
-            pixels.data[i + 1] = average;
-            pixels.data[i + 2] = average;
-        }
-        return pixels;
     }
 
     function percentDifference(pixels1, pixels2) {
