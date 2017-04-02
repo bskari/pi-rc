@@ -13,17 +13,17 @@ body {
     line-height: 1.15;
     margin: 0;
 }
+header {
+    font-size: 200%;
+    margin: 10px;
+}
 .content {
     display: table;
-    max-width: 48rem;
     text-align: left;
 }
 .center {
+    text-align: center;
     margin: 0 auto;
-}
-.header {
-    font-size: 1.5rem;
-    display: table-cell;
 }
 .label {
     float: left;
@@ -92,6 +92,7 @@ body {
     var countDown = 0;
     var sendSignals = false;
     var referenceImage = null;
+    var differenceThreshold = 5;
 
     function startUp() {
         video = document.getElementById('video');
@@ -132,15 +133,11 @@ body {
         clearPhoto();
     }
 
-    function toggleMonitoring(state) {
-        if (state === undefined) {
-            state = sendSignals;
-        }
-        sendSignals = !state;
-
+    function toggleMonitoring() {
+        sendSignals = !sendSignals;
         if (sendSignals) {
             monitorButton.text = 'Stop monitoring';
-            countDown = 3;
+            countDown = 5;
             countDownDiv.children[0].children[0].textContent = countDown + '...';
             countDownDiv.style.display = 'block';
             countDownIntervalId = setInterval(updateCountDown, 1000);
@@ -152,6 +149,7 @@ body {
                 clearInterval(countDownIntervalId);
             }
         }
+        referenceImage = null;
     }
 
     function clearPhoto() {
@@ -176,10 +174,6 @@ body {
             photo.setAttribute('src', data);
         } else {
             clearPhoto();
-        }
-        if (sendSignals && referenceImage !== null) {
-            var difference = percentDifference(rawData, referenceImage);
-            imageChange.value = (difference + '').substring(0, 4);
         }
     }
 
@@ -220,7 +214,7 @@ body {
             syncMultiplier = 2;
             syncRepeats = 2;
             signalRepeats = 5;
-            toggleMonitoring(false);
+            toggleMonitoring();
         }
 
         document.getElementById('useconds').value = useconds;
@@ -270,18 +264,29 @@ body {
 
     function getVideoDeviceSelector() {
         var cameraSelect = document.getElementById('camera-select');
+        var defaultOptions = {
+            width: {
+                max: 1280,
+                ideal: 640
+            },
+            height: {
+                max: 960,
+                ideal: 480
+            }
+        };
         if (cameraSelect) {
-            return {deviceId: cameraSelect.value};
+            defaultOptions.deviceId = cameraSelect.value;
+            return defaultOptions;
         }
         // Otherwise just grab any device
-        return true;
+        return defaultOptions;
     }
 
     function startPreview() {
         // I'd prefer to always use the environment facing camera. Firefox
-        // honors facingMode, iOS Safari doesn't, Android Chrome claims to but
-        // doesn't. Not sure about Opera. We'll just let the user choose an
-        // enumerated device, or use the only one.
+        // honors facingMode, iOS Safari doesn't support WebRTC at all, Android
+        // Chrome claims to but doesn't. Not sure about Opera. We'll just let
+        // the user choose an enumerated device, or use the only one.
         var videoOptions = {
             video: getVideoDeviceSelector(),
             audio: false
@@ -313,7 +318,7 @@ body {
                 getUserMedia(videoOptions, setVideoSource, alertError);
             }
         }
-        pictureRepeatId = setInterval(takePicture, 1000);
+        pictureIntervalId = setInterval(takePicture, 1000);
     }
 
     function updateCountDown() {
@@ -322,27 +327,60 @@ body {
             countDownDiv.style.display = 'none';
             if (countDownIntervalId) {
                 clearInterval(countDownIntervalId);
+                countDownIntervalId = null;
+            }
+            if (pictureIntervalId) {
+                clearInterval(pictureIntervalId);
+                pictureIntervalId = null;
             }
             // Save the reference image
+            takePicture();
             var context = canvas.getContext('2d');
             var pixels = context.getImageData(0, 0, canvas.width, canvas.height);
             referenceImage = pixels;
+            imageChange.value = 0.0;
+
+            // Use a recursive function with setTimeout instead of setInterval
+            // to work around slow devices calculating diff
+            (function loop() {
+                takePicture();
+                var context = canvas.getContext('2d');
+                rawData = context.getImageData(0, 0, width, height);
+                var difference = percentDifference(rawData, referenceImage);
+                imageChange.value = (difference + '').substring(0, 6);
+                nextCommand();
+                // TODO: Send different commands
+
+                pictureIntervalId = setTimeout(
+                    function() {
+                        if (imageChange.value < differenceThreshold) {
+                            loop();
+                        } else {
+                            toggleMonitoring();
+                        }
+                    },
+                    1000
+                );
+            })();
         } else {
             countDownDiv.children[0].children[0].textContent = countDown + '...';
         }
     }
 
     function percentDifference(pixels1, pixels2) {
-        var limit = pixels1.height * pixels1.width * 4;
+        // On mobile, it looks like the preview is cutting off some pixels, and
+        // for some reason, the reference image is different sized from the
+        // actual photo, so be careful when iterating
+        var pixelCount = Math.min(pixels1.width * pixels1.height, pixels2.width * pixels2.height);
+        var limit = pixelCount * 4;
         var sumDifference = 0.0;
-        var test = false;
         for (var i = 0; i < limit; i += 4) {
             sumDifference += Math.abs(pixels1.data[i] - pixels2.data[i]);
             sumDifference += Math.abs(pixels1.data[i + 1] - pixels2.data[i + 1]);
             sumDifference += Math.abs(pixels1.data[i + 2] - pixels2.data[i + 2]);
             // Skip alpha
         }
-        return sumDifference / (pixels1.height * pixels1.width * 256 * 3) * 100;
+        return sumDifference / (pixelCount * 256 * 3) * 100;
     }
 
     window.addEventListener('load', startUp, false);
@@ -351,15 +389,11 @@ body {
 <body>
 <div id="count-down" class="modal">
     <div class="modal-content">
-        <p>3...</p>
+        <p>5...</p>
     </div>
 </div>
 <div class="content center">
-    <div>
-        <header class="header center">
-            <h1>RC monitor</h1>
-        </header>
-    </div>
+    <header>RC monitor</header>
     <div class="hidden">
         <video id="video">Sorry, no video stream is available</video>
         <canvas id="canvas"></canvas>
@@ -405,31 +439,31 @@ body {
         <label for="useconds">Useconds</label>
     </div>
     <div class="value">
-        <input id="useconds" class="parameter" value="100">
+        <input id="useconds" class="parameter" value="100" type="number">
     </div>
     <div class="label">
         <label for="sync-repeats">Sync repeats</label>
     </div>
     <div class="value">
-        <input id="sync-repeats" class="parameter" value="2">
+        <input id="sync-repeats" class="parameter" value="2" type="number">
     </div>
     <div class="label">
         <label for="sync-multiplier">Sync multiplier</label>
     </div>
     <div class="value">
-        <input id="sync-multiplier" class="parameter" value="2">
+        <input id="sync-multiplier" class="parameter" value="2" type="number">
     </div>
     <div class="label">
         <label for="signal-repeats">Signal repeats</label>
     </div>
     <div class="value">
-        <input id="signal-repeats" class="parameter" value="5">
+        <input id="signal-repeats" class="parameter" value="5" type="number">
     </div>
     <div class="label">
         <label for="image-change">Image change %</label>
     </div>
     <div class="value">
-        <input id="image-change" class="parameter" disabled="disabled">
+        <input id="image-change" class="parameter" disabled="disabled" value="0.0">
     </div>
 </div>
 <div class="content center">
