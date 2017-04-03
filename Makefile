@@ -15,7 +15,7 @@ else
 	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS}
 endif
 
-LDFLAGS := -lm -ljansson
+LDLIBS := -lm -ljansson
 
 pi_pcm: pi_pcm.o mailbox.o
 
