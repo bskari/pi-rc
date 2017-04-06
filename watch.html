@@ -83,6 +83,7 @@ header {
     var streaming = false;
     var video = null;
     var canvas = null;
+    var photo = null;
     var countDownDiv = null;
     var monitorButton = null;
     var previewButton = null;
@@ -97,6 +98,7 @@ header {
     function startUp() {
         video = document.getElementById('video');
         canvas = document.getElementById('canvas');
+        photo = document.getElementById('photo');
         monitorButton = document.getElementById('toggle-monitoring');
         previewButton = document.getElementById('start-preview');
         countDownDiv = document.getElementById('count-down');
