@@ -77,6 +77,7 @@ header {
 </style>
 <script>
 (function() {
+    'use strict';
     var width = 320;
     var height = 0; // This will be computed based on the input stream
 
@@ -180,10 +181,10 @@ header {
     }
 
     function nextCommand() {
-        useconds = document.getElementById('useconds').value | 0;
-        syncRepeats = document.getElementById('sync-repeats').value | 0;
-        syncMultiplier = document.getElementById('sync-multiplier').value | 0;
-        signalRepeats = document.getElementById('signal-repeats').value | 0;
+        var useconds = document.getElementById('useconds').value | 0;
+        var syncRepeats = document.getElementById('sync-repeats').value | 0;
+        var syncMultiplier = document.getElementById('sync-multiplier').value | 0;
+        var signalRepeats = document.getElementById('signal-repeats').value | 0;
         if (useconds < 100 || useconds > 1201) {
             useconds = 100;
         }
@@ -347,7 +348,7 @@ header {
             (function loop() {
                 takePicture();
                 var context = canvas.getContext('2d');
-                rawData = context.getImageData(0, 0, width, height);
+                var rawData = context.getImageData(0, 0, width, height);
                 var difference = percentDifference(rawData, referenceImage);
                 imageChange.value = (difference + '').substring(0, 6);
                 nextCommand();
