@@ -111,6 +111,11 @@
 #define PERIPH_PHYS_BASE 0x7e000000
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
+#elif (TEST_COMPILATION)==1
+#define PERIPH_VIRT_BASE 0x0
+#define PERIPH_PHYS_BASE 0x0
+#define DRAM_PHYS_BASE 0x0
+#define MEM_FLAG 0x0
 #else
 #error Unknown Raspberry Pi version (variable RASPI)
 #endif
@@ -275,6 +280,9 @@ void decode_websocket_message(char message[]);
 
 
 int main(int argc, char** argv) {
+#ifdef TEST_COMPILATION
+    printf("Testing on non-Pi hardware, no radio signal will be generated\n");
+#endif
     struct pi_options options = get_args(argc, argv);
     int i;
 
@@ -302,6 +310,7 @@ int main(int argc, char** argv) {
     /* The fractional part is stored in the lower 12 bits */
     float frequency = 49.830;
 
+#ifndef TEST_COMPILATION
     dma_reg = map_peripheral(DMA_VIRT_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_VIRT_BASE, PWM_LEN);
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
@@ -334,65 +343,26 @@ int main(int argc, char** argv) {
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;
 
     ctl = (struct control_data_s*)mbox.virt_addr;
-    struct dma_cb_t* cbp = ctl->cb;
-    uint32_t phys_sample_dst = CM_GP0DIV;
-    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
+#else
+    struct control_data_s test_struct;
+    ctl = &test_struct;
+#endif
 
-    const int frequency_control = frequency_to_control(frequency);
-    for (i = 0; i < NUM_SAMPLES; i++) {
-        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
-        /* Write a frequency sample */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
-        cbp->src = mem_virt_to_phys(ctl->sample + i);
-        cbp->dst = phys_sample_dst;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-        /* Delay */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
-        cbp->src = mem_virt_to_phys(mbox.virt_addr);
-        cbp->dst = phys_pwm_fifo_addr;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-    }
-    cbp--;
+#ifndef TEST_COMPILATION
+    initialize_mbox();
+#endif
+
+    struct dma_cb_t* cbp = ctl->cb;
+
+#ifndef TEST_COMPILATION
+    write_samples(cbp, frequency);
+#endif
+
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
-    /**
-     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
-     * which is 5us, the rate at which we want to update the GPCLK control
-     * register.
-     */
-    pwm_reg[PWM_CTL] = 0;
-    udelay(10);
-    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
-    udelay(100);
-    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
-    udelay(100);
-    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
-    udelay(100);
-    pwm_reg[PWM_RNG1] = 500;
-    udelay(10);
-    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
-    udelay(10);
-
-    /* Initialise the DMA */
-    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
-    udelay(10);
-    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
-    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
-    if (options.verbose) {
-        printf("virt %x\n", mem_virt_to_phys(ctl->cb));
-    }
-    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
-    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
+#ifndef TEST_COMPILATION
+    initialize_dma();
+#endif
 
     struct command_node_t* command = malloc(sizeof(*command));
     command->burst_us = 100.0f;
@@ -592,7 +562,11 @@ int main(int argc, char** argv) {
             }
         }
 
+#ifndef TEST_COMPILATION
         const int used = fill_buffer(command, new_command, ctl, dma_reg);
+#else
+        const int used = 1;
+#endif
         if (used > 0) {
             if (new_command != NULL) {
                 free_command(command);
@@ -607,6 +581,85 @@ int main(int argc, char** argv) {
     terminate(0);
 
     return 0;
+}
+
+
+static void write_samples(struct dma_cb_t* cbp, const float frequency) {
+    int i;
+    const int frequency_control = frequency_to_control(frequency);
+    uint32_t phys_sample_dst = CM_GP0DIV;
+    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
+
+    for (i = 0; i < NUM_SAMPLES; i++) {
+        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
+        /* Write a frequency sample */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
+        cbp->src = mem_virt_to_phys(ctl->sample + i);
+        cbp->dst = phys_sample_dst;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+        /* Delay */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
+        cbp->src = mem_virt_to_phys(mbox.virt_addr);
+        cbp->dst = phys_pwm_fifo_addr;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+    }
+}
+
+
+static void initialize_dma(void) {
+    /**
+     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
+     * which is 5us, the rate at which we want to update the GPCLK control
+     * register.
+     */
+    pwm_reg[PWM_CTL] = 0;
+    udelay(10);
+    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
+    udelay(100);
+    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
+    udelay(100);
+    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
+    udelay(100);
+    pwm_reg[PWM_RNG1] = 500;
+    udelay(10);
+    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
+    udelay(10);
+
+    /* Initialise the DMA */
+    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
+    udelay(10);
+    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
+    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
+    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
+    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
+}
+
+
+static void initialize_mbox(void) {
+    mbox.handle = mbox_open();
+    if (mbox.handle < 0) {
+        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
+    }
+    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
+        fatal("Could not allocate memory.\n");
+    }
+    // TODO: How do we know that succeeded?
+    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
+        fatal("Could not lock memory.\n");
+    }
+    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
+        fatal("Could not map memory.\n");
+    }
 }
 
 
@@ -644,17 +697,17 @@ static void fatal(char* fmt, ...) {
 }
 
 
-static uint32_t mem_virt_to_phys(void* virt) {
+uint32_t mem_virt_to_phys(void* virt) {
     uint32_t offset = (uint8_t*)virt - mbox.virt_addr;
     return mbox.bus_addr + offset;
 }
 
 
-static uint32_t mem_phys_to_virt(uint32_t phys) {
+uint32_t mem_phys_to_virt(uint32_t phys) {
   return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
 }
 
-static void* map_peripheral(uint32_t base, uint32_t len) {
+void* map_peripheral(uint32_t base, uint32_t len) {
     int fd = open("/dev/mem", O_RDWR);
     void* vaddr;
 
@@ -881,7 +934,7 @@ CLEANUP:
 }
 
 
-static void free_command(struct command_node_t* command) {
+void free_command(struct command_node_t* command) {
     while (command) {
         struct command_node_t* const previous = command;
         command = command->next;
@@ -890,7 +943,7 @@ static void free_command(struct command_node_t* command) {
 }
 
 
-static struct pi_options get_args(const int argc, char* argv[]) {
+struct pi_options get_args(const int argc, char* argv[]) {
     const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
         {"verbose", no_argument, NULL, 'v'},
@@ -946,7 +999,7 @@ static struct pi_options get_args(const int argc, char* argv[]) {
 }
 
 
-static void print_usage(const char* program) {
+void print_usage(const char* program) {
     printf("Usage: %s [OPTIONS]\n", program);
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
