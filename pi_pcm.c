@@ -264,7 +264,8 @@ static int parse_json(
 );
 static void free_command(struct command_node_t* command);
 static const char* post_response(const int status);
-static int decode_post_request(char* post_message, char** json_out);
+static int hexit_to_value(char hexit);
+static int decode_post_request(char* raw_post_data, char* json_out);
 
 
 int main(int argc, char** argv) {
@@ -313,13 +314,10 @@ int main(int argc, char** argv) {
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;
 
     ctl = (struct control_data_s*)mbox.virt_addr;
+    initialize_mbox();
 #else
     struct control_data_s test_struct;
     ctl = &test_struct;
-#endif
-
-#ifndef TEST_COMPILATION
-    initialize_mbox();
 #endif
 
     struct dma_cb_t* cbp = ctl->cb;
@@ -381,31 +379,19 @@ int main(int argc, char** argv) {
     }
 
     if (options.tcp) {
-        printf("Calling listen\n");
         const int listen_status = listen(socket_handle, 1);
         if (listen_status < 0) {
             fatal("Unable to listen\n");
         }
-        printf("Calling accept\n");
+        printf("Listening for commands on TCP port %d\n", options.port);
         tcp_socket_connection = accept(socket_handle, NULL, NULL);
-        printf("Done calling accept\n");
         if (tcp_socket_connection < 0) {
             fatal("Unable to accept TCP connection\n");
         }
     }
 
-    int fcntl_status = fcntl(socket_handle, F_SETFL, O_NONBLOCK);
-    if (fcntl_status < 0) {
-        fatal("Unable to set socket options\n");
-    }
-    if (options.tcp) {
-        fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
-        if (fcntl_status < 0) {
-            fatal("Unable to set socket options\n");
-        }
-    }
-
-    char json_buffer[BUFFER_SIZE];
+    char message_buffer[BUFFER_SIZE];
+    char post_data[BUFFER_SIZE];
 
     while (1) {
         /* This is nonblocking because we set it as such as above */
@@ -413,8 +399,8 @@ int main(int argc, char** argv) {
         if (options.udp) {
             bytes_count = recvfrom(
                 socket_handle,
-                json_buffer,
-                sizeof(json_buffer) / sizeof(json_buffer[0]),
+                message_buffer,
+                sizeof(message_buffer) / sizeof(message_buffer[0]),
                 0,
                 (struct sockaddr*)&client_address,
                 &client_length);
@@ -422,8 +408,8 @@ int main(int argc, char** argv) {
             if (tcp_socket_connection != 0) {
                 bytes_count = recv(
                     tcp_socket_connection,
-                    json_buffer,
-                    sizeof(json_buffer) / sizeof(json_buffer[0]),
+                    message_buffer,
+                    sizeof(message_buffer) / sizeof(message_buffer[0]),
                     0);
                 if (bytes_count == 0) {
                     /* Socket closed, wait for another connection */
@@ -431,18 +417,17 @@ int main(int argc, char** argv) {
                 }
             } else {
                 /* Look for another connection */
-                printf("Calling accept again\n");
                 tcp_socket_connection = accept(socket_handle, NULL, NULL);
-                printf("After accept tcp_socket_connection = %d\n", tcp_socket_connection);
                 if (tcp_socket_connection < 0) {
+                    fprintf(stderr, "Unable to accept TCP connection: %s\n", strerror(errno));
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         /* No connection ready, just keep running */
                         tcp_socket_connection = 0;
                     } else {
-                        fatal("Unable to accept TCP connection\n");
+                        fatal("Unable to accept TCP connection: %s\n", strerror(errno));
                     }
                 } else {
-                    fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
+                    const int fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
                     if (fcntl_status < 0) {
                         fatal("Unable to set socket options\n");
                     }
@@ -457,36 +442,38 @@ int main(int argc, char** argv) {
          */
         if (
             bytes_count > 0
-            && (size_t)bytes_count < sizeof(json_buffer) / sizeof(json_buffer[0])
+            && (size_t)bytes_count < sizeof(message_buffer) / sizeof(message_buffer[0])
         ) {
-            json_buffer[bytes_count] = '\0';
+            message_buffer[bytes_count] = '\0';
             struct command_node_t* parsed_command = NULL;
             int request_response = 0;
-            char* message = json_buffer;
-            if (strncmp("POST ", message, 5) == 0) {
-                const int status = decode_post_request(json_buffer, &message);
+            char* json_data = NULL;
+            if (strncmp("POST ", message_buffer, 5) == 0) {
+                const int status = decode_post_request(message_buffer, post_data);
+                json_data = post_data;
                 const char* const response = post_response(status);
                 send(tcp_socket_connection, response, strlen(response), 0);
-                printf("Closing TCP socket connection\n");
                 close(tcp_socket_connection);
                 tcp_socket_connection = 0;
                 if (status) {
                     printf("Bad POST request\n");
                     continue;
                 }
+            } else {
+                json_data = message_buffer;
             }
 
             if (options.verbose) {
-                printf("%s\n", message);
+                printf("Received message \"%s\"\n", json_data);
             }
             const int parse_status = parse_json(
-                message,
+                json_data,
                 &parsed_command,
                 &request_response);
-            if (request_response) {
+            if (request_response && options.udp) {
                 const int length = snprintf(
-                    message,
-                    sizeof(json_buffer) / sizeof(json_buffer[0]),
+                    message_buffer,
+                    sizeof(message_buffer) / sizeof(message_buffer[0]),
                     "{\"time\": %d}",
                     (int)time(NULL));
                 /**
@@ -494,14 +481,9 @@ int main(int argc, char** argv) {
                  * above the port that it sent to us
                  */
                 client_address.sin_port = htons(ntohs(server_address.sin_port) + 1);
-                /**
-                 * TODO: This probably needs to be updated for TCP,
-                 * although, TCP guarantees delivery anyway, so maybe it's
-                 * not necessary.
-                 */
                 sendto(
                     socket_handle,
-                    json_buffer,
+                    message_buffer,
                     length,
                     0,
                     (struct sockaddr*)&client_address,
@@ -970,8 +952,8 @@ struct pi_options get_args(const int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
     if (!options.tcp && !options.udp) {
-        /* Default to UDP */
-        options.udp = 1;
+        /* Default to TCP */
+        options.tcp = 1;
     }
     return options;
 }
@@ -999,9 +981,14 @@ Content-Type: text/plain\r\n";
 }
 
 
-int decode_post_request(char* message, char** buffer) {
-	// Find two CRLFs in a row to get data
-    message = strstr(message, "\r\n\r\n");
+int hexit_to_value(char hexit) {
+    return (hexit > '9') ? (hexit &~ 0x20) - 'A' + 10 : (hexit - '0');
+}
+
+
+int decode_post_request(char* raw_post_data, char* json_out) {
+    // Find two CRLFs in a row to get data
+    char* message = strstr(raw_post_data, "\r\n\r\n");
     if (!message) {
         // Invalid POST
         return 1;
@@ -1013,14 +1000,35 @@ int decode_post_request(char* message, char** buffer) {
         ++message;
     }
     ++message;
-    *buffer = message;
     // There shouldn't be any other parameters, but just in case, scan to the
-    // end
-    while (*message) {
+    // end. We also need to decode percent-encoding.
+    while (*message != '\0') {
         if (*message == '=') {
             return 2;
         }
-        ++message;
+        if (*message == '%') {
+            ++message;
+            if (*message == '\0') {
+                return 2;
+            }
+            const int firstHexValue = hexit_to_value(*message);
+
+            ++message;
+            if (*message == '\0') {
+                return 2;
+            }
+            const int secondHexValue = hexit_to_value(*message);
+
+            *json_out = (char)(firstHexValue * 16 + secondHexValue);
+            ++json_out;
+            ++message;
+
+        } else { // Not '%'
+            *json_out = *message;
+            ++json_out;
+            ++message;
+        }
     }
+    *json_out = '\0';
     return 0;
 }

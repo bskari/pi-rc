@@ -25,37 +25,16 @@
 
     <div class="flex-container" style="height: 200px;">
         <div class="flex-container" style="width: 50%; height: 100%; display: block;">
-            <div id="forward" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡩</div>
-            <div id="reverse" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡫</div>
+            <div id="forward-button" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡩</div>
+            <div id="reverse-button" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡫</div>
         </div>
         <div class="flex-container" style="width: 50%;">
-            <div id="left" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡨</div>
-            <div id="right" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡪</div>
+            <div id="left-button" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡨</div>
+            <div id="right-button" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡪</div>
         </div>
     </div>
 
-    <h2 id="server-heading">Server ▼</h2>
-    <div id="server-options">
-    <table>
-        <tr>
-            <td>Server address</td>
-            <td>
-                <input id="server-address" autocomplete="on"/>
-            </td>
-        </tr>
-        <tr>
-            <td>Port</td>
-            <td>
-                <input id="port" type="number" value="12345"/>
-            </td>
-        </tr>
-        <tr>
-            <td colspan="2">
-                <button id="connect">Connect</button>
-            </td>
-        </tr>
-    </table>
-    </div>
+    <p id="message"></p>
 
     <h2 id="parameters-heading">Parameters ▼</h2>
     <label for="parameter-file">
@@ -116,6 +95,18 @@
             <td>Forward right</td>
             <td>
                 <input id="forward-right" type="number" min="5" max="100" step="1" value="33"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Left</td>
+            <td>
+                <input id="left" type="number" min="5" max="100" step="1" value="59"/>
+            </td>
+        </tr>
+        <tr>
+            <td>Right</td>
+            <td>
+                <input id="right" type="number" min="5" max="100" step="1" value="64"/>
             </td>
         </tr>
         <tr>

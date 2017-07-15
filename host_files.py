@@ -1,16 +1,61 @@
 """Hosts files from the local directory using SSL."""
+from __future__ import print_function
+import requests
 import ssl
 import subprocess
 import sys
 
+# pylint: disable=C0411
 if sys.version_info.major < 3:
     import SimpleHTTPServer
     import SocketServer
     Server = SocketServer.TCPServer
     SimpleHTTPRequestHandler = SimpleHTTPServer.SimpleHTTPRequestHandler
 else:
-    from http.server import SimpleHTTPRequestHandler, HTTPServer
-    Server = HTTPServer
+    from http.server import SimpleHTTPRequestHandler, HTTPServer  # pylint: disable=E0401
+    Server = HTTPServer  # pylint: disable=C0103
+
+
+class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R0903
+    """Serves files over GET and handles commands send over POST."""
+
+    def do_POST(self):  # pylint: disable=C0103
+        """Handles POST requests."""
+        if not self.path.endswith('/'):
+            # Redirect browser - doing basically what Apache does
+            self.send_response(301)
+            self.send_header('Location', self.path + '/')
+            self.end_headers()
+            return
+
+        if self.path == '/command/':
+            # Forward this request on to the C server, because doing SSL in C
+            # sounds hard
+            content_length = int(self.headers.getheader('Content-Length'))
+            post_data = self.rfile.read(content_length)
+            # Strip off 'data='
+            post_data = post_data.split('=')[1]
+            print(post_data)
+
+            try:
+                post_request = requests.post(
+                    'http://localhost:12345',
+                    data={'data': post_data},
+                    timeout=0.25
+                )
+            except:
+                print('Sending 500')
+                self.send_response(500)
+                self.end_headers()
+                return
+
+            self.send_response(post_request.status_code)
+            self.end_headers()
+            return
+
+        self.send_response(404, 'Not found')
+        self.end_headers()
+
 
 def main():
     """Main."""
@@ -45,7 +90,7 @@ script will now generate a self-signed certificate.'''
 
     print('Starting server')
     server_address = ('0.0.0.0', 4443)
-    httpd = Server(server_address, SimpleHTTPRequestHandler)
+    httpd = Server(server_address, PostCommandsRequestHandler)
     httpd.socket = ssl.wrap_socket(
         httpd.socket,
         server_side=True,
@@ -55,6 +100,7 @@ script will now generate a self-signed certificate.'''
     )
     print('Running server')
     httpd.serve_forever()
+
 
 if __name__ == '__main__':
     main()
