@@ -2,17 +2,44 @@
 <html lang="en">
 <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Raspberry Pi RC controller</title>
+
+<style>
+.flex-container {
+    display: -webkit-flex;
+    display: flex;
+}
+.control-button {
+    border: 1px solid black;
+    text-align: center;
+    font-size: 300%;
+}
+</style>
+
 </head>
 
 <body id="body">
     <h1>Pi-RC controller</h1>
-    <h2>Server</h2>
+
+    <div class="flex-container" style="height: 200px;">
+        <div class="flex-container" style="width: 50%; height: 100%; display: block;">
+            <div id="forward" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡩</div>
+            <div id="reverse" class="control-button" style="height: 50%; width: 100%; line-height: 100px;">🡫</div>
+        </div>
+        <div class="flex-container" style="width: 50%;">
+            <div id="left" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡨</div>
+            <div id="right" class="control-button" style="height: 100%; width: 50%; line-height: 200px;">🡪</div>
+        </div>
+    </div>
+
+    <h2 id="server-heading">Server ▼</h2>
+    <div id="server-options">
     <table>
         <tr>
             <td>Server address</td>
             <td>
-                <input id="server-address" value="127.0.0.1" autocomplete="on"/>
+                <input id="server-address" autocomplete="on"/>
             </td>
         </tr>
         <tr>
@@ -27,12 +54,14 @@
             </td>
         </tr>
     </table>
+    </div>
 
-    <h2>Controls</h2>
-    <label for="control-file">
-        <b>Load JSON control file</b>
-        <input id="control-file" name="control-file" type="file" accept="application/json"/>
+    <h2 id="parameters-heading">Parameters ▼</h2>
+    <label for="parameter-file">
+        <b>Load JSON parameter file</b>
+        <input id="parameter-file" name="parameter-file" type="file" accept="application/json"/>
     </label>
+    <div id="parameters-options">
     <table>
         <tr>
             <td>Frequency</td>
@@ -107,6 +136,7 @@
             </td>
         </tr>
     </table>
+    </div>
 
     <script type="text/javascript" charset="utf-8">
 
@@ -206,32 +236,64 @@ function sendControlMessage(evt) {
 }
 function keyHandler(evt, down) {
     evt = evt || window.evt;
-    var key = evt.key || evt.which || evt.keyCode;
+
+    var key = evt.key || evt.which || evt.keyCode || evt.changedTouches[0].target;
     var needUpdate = false;  // We'll use this to ignore key repeats
 
-    if (key === 38) {  // Up
+    if (key === 38 || key === 'ArrowUp' || key === document.getElementById('forward')) {  // Up
         needUpdate = (forward !== down);
         forward = down;
-    } else if (key === 40) {  // Down
+    } else if (key === 40 || key === 'ArrowDown' || key === document.getElementById('reverse')) {  // Down
         needUpdate = (reverse !== down);
         reverse = down;
-    } else if (key === 37) {  // Left
+    } else if (key === 37 || key === 'ArrowLeft' || key === document.getElementById('left')) {  // Left
         needUpdate = (left !== down);
         left = down;
-    } else if (key === 39) {  // Right
+    } else if (key === 39 || key === 'ArrowRight' || key === document.getElementById('right')) {  // Right
         needUpdate = (right !== down);
         right = down;
     }
     if (needUpdate) {
         sendControlMessage();
+        evt.preventDefault();
     }
 }
 
-document.getElementById("control-file").addEventListener("change", handleFileSelect);
+function addToggleOptionsListener(headingId, optionsId) {
+    document.getElementById(optionsId).style.display = 'none';
+    document.getElementById(headingId).addEventListener('click', function() {
+        var heading = document.getElementById(headingId);
+        var text = heading.innerText;
+        var options = document.getElementById(optionsId);
+        if (options.style.display == 'none') {
+            heading.innerText = text.substr(0, text.length - 1) + '▲';
+            options.style.display = 'block';
+        } else {
+            heading.innerText = text.substr(0, text.length - 1) + '▼';
+            options.style.display = 'none';
+        }
+    }.bind(this));
+}
+
+addToggleOptionsListener('server-heading', 'server-options');
+addToggleOptionsListener('parameters-heading', 'parameters-options');
+
+document.getElementById("parameter-file").addEventListener("change", handleFileSelect);
 document.getElementById("connect").addEventListener("click", connect);
-var body = document.getElementById("body");
-body.addEventListener("keyup", function (evt) { keyHandler(evt, false); });
-body.addEventListener("keydown", function (evt) { keyHandler(evt, true); });
+document.getElementById("server-address").value = window.location.hostname;
+
+['forward', 'reverse', 'left', 'right'].forEach(function (id) {
+    var element = document.getElementById(id);
+    ['mousedown', 'touchstart'].forEach(function (action) {
+        element.addEventListener(action, function (evt) { keyHandler(evt, true); });
+    });
+    ['mouseup', 'touchend'].forEach(function (action) {
+        element.addEventListener(action, function (evt) { keyHandler(evt, false); });
+    });
+});
+var element = document.getElementById('body');
+element.addEventListener('keydown', function (evt) { keyHandler(evt, true); });
+element.addEventListener('keyup', function (evt) { keyHandler(evt, false); });
 
     </script>
 
