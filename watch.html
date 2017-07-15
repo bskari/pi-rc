@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<title>Webcam monitor</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+* {
+    box-sizing: border-box;
+}
+body {
+    font-family: sans-serif;
+    line-height: 1.15;
+    margin: 0;
+}
+header {
+    font-size: 200%;
+    margin: 10px;
+}
+.content {
+    display: table;
+    text-align: left;
+}
+.center {
+    text-align: center;
+    margin: 0 auto;
+}
+.label {
+    float: left;
+    padding: .25rem;
+    text-align: right;
+    width: 50%;
+}
+.value {
+    float: left;
+    padding: .25rem;
+    text-align: left;
+    width: 50%;
+}
+.button {
+    opacity: 1;
+    font-size: .875rem;
+    margin-bottom: .5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-top: .5rem;
+    padding-bottom: .5rem;
+    background-color: #000;
+    color: #fff;
+    text-decoration: none;
+    display: inline-block;
+    border-radius: .25rem;
+}
+.hidden {
+    display: none;
+}
+.modal {
+	display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgb(0, 0, 0);  /* Fallback if alpha not supported */
+    background-color: rgba(0, 0, 0, 0.4);
+}
+.modal-content {
+	background-color: white;
+    text-align: center;
+	margin: 15% auto;
+	padding: 20px;
+    border: 1px solid black;
+    width: 20%;
+}
+</style>
+<script>
+(function() {
+    'use strict';
+    var width = 320;
+    var height = 0; // This will be computed based on the input stream
+
+    var streaming = false;
+    var video = null;
+    var canvas = null;
+    var photo = null;
+    var countDownDiv = null;
+    var monitorButton = null;
+    var previewButton = null;
+    var imageChange = null;
+    var pictureIntervalId = null;
+    var countDownIntervalId = null;
+    var countDown = 0;
+    var sendSignals = false;
+    var referenceImage = null;
+    var differenceThreshold = 5;
+
+    function startUp() {
+        video = document.getElementById('video');
+        canvas = document.getElementById('canvas');
+        photo = document.getElementById('photo');
+        monitorButton = document.getElementById('toggle-monitoring');
+        previewButton = document.getElementById('start-preview');
+        countDownDiv = document.getElementById('count-down');
+        imageChange = document.getElementById('image-change');
+
+        video.addEventListener('canplay', function(event) {
+            if (!streaming) {
+                height = video.videoHeight / (video.videoWidth / width);
+
+                // Work around Firefox bug
+                if (isNaN(height)) {
+                    height = width / (4 / 3);
+                }
+
+                video.setAttribute('width', width);
+                video.setAttribute('height', height);
+                canvas.setAttribute('width', width);
+                canvas.setAttribute('height', height);
+                streaming = true;
+            }
+        }, false);
+
+        enumerateDevices();
+
+        monitorButton.addEventListener('click', function(event) {
+            event.preventDefault();
+            toggleMonitoring();
+        }, false);
+        previewButton.addEventListener('click', function(event) {
+            event.preventDefault();
+            startPreview();
+        }, false);
+
+        clearPhoto();
+    }
+
+    function toggleMonitoring() {
+        sendSignals = !sendSignals;
+        if (sendSignals) {
+            monitorButton.text = 'Stop monitoring';
+            countDown = 5;
+            countDownDiv.children[0].children[0].textContent = countDown + '...';
+            countDownDiv.style.display = 'block';
+            countDownIntervalId = setInterval(updateCountDown, 1000);
+        } else {
+            monitorButton.text = 'Start monitoring';
+            countDown = 0;
+            countDownDiv.style.display = 'none';
+            if (countDownIntervalId) {
+                clearInterval(countDownIntervalId);
+            }
+        }
+        referenceImage = null;
+    }
+
+    function clearPhoto() {
+        var context = canvas.getContext('2d');
+        context.fillStyle = '#AAA';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        var data = canvas.toDataURL('image/png');
+        photo.setAttribute('src', data);
+    }
+
+    function takePicture() {
+        var context = canvas.getContext('2d');
+        var rawData;
+        if (width && height) {
+            canvas.width = width;
+            canvas.height = height;
+            context.drawImage(video, 0, 0, width, height);
+            rawData = context.getImageData(0, 0, width, height);
+            context.putImageData(rawData, 0, 0);
+            var data = canvas.toDataURL('image/png');
+            photo.setAttribute('src', data);
+        } else {
+            clearPhoto();
+        }
+    }
+
+    function nextCommand() {
+        var useconds = document.getElementById('useconds').value | 0;
+        var syncRepeats = document.getElementById('sync-repeats').value | 0;
+        var syncMultiplier = document.getElementById('sync-multiplier').value | 0;
+        var signalRepeats = document.getElementById('signal-repeats').value | 0;
+        if (useconds < 100 || useconds > 1201) {
+            useconds = 100;
+        }
+        if (syncRepeats < 2 || syncRepeats > 7) {
+            syncRepeats = 2;
+        }
+        if (syncMultiplier < 2 || syncMultiplier > 7) {
+            syncMultiplier = 2;
+        }
+        if (signalRepeats < 5 || signalRepeats > 50) {
+            signalRepeats = 5;
+        }
+
+        signalRepeats += 1;
+        if (signalRepeats > 50) {
+            signalRepeats = 5;
+            syncRepeats += 1;
+        }
+        if (syncRepeats > 7) {
+            syncRepeats = 2;
+            syncMultiplier += 1;
+        }
+        if (syncMultiplier > 7) {
+            syncMultiplier = 2;
+            useconds += 100;
+        }
+        if (useconds > 1201) {
+            // Nothing more to do, reset everything
+            useconds = 100;
+            syncMultiplier = 2;
+            syncRepeats = 2;
+            signalRepeats = 5;
+            toggleMonitoring();
+        }
+
+        document.getElementById('useconds').value = useconds;
+        document.getElementById('sync-multiplier').value = syncMultiplier;
+        document.getElementById('sync-repeats').value = syncRepeats;
+        document.getElementById('signal-repeats').value = signalRepeats;
+    }
+
+    // This function should only be called once
+    function enumerateDevices() {
+        function removeCameraSelect() {
+            var container = document.getElementById('camera-container');
+            while (container.firstChild) {
+                container.removeChild(container.firstChild);
+            }
+        }
+        if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+            navigator.mediaDevices.enumerateDevices().then(function(devices) {
+                devices = devices.filter(function(device) {
+                    return device.kind === 'videoinput';
+                });
+                // If there's only one camera, just use it
+                if (devices.length <= 1) {
+                    removeCameraSelect();
+                    startPreview();
+                    return;
+                }
+                var cameraSelect = document.getElementById('camera-select');
+                devices.forEach(function(device, index) {
+                    var option = document.createElement('option');
+                    // Testing on Firefox on a laptop didn't have any labels
+                    if (device.label) {
+                        option.text = device.label;
+                    } else {
+                        option.text = 'Camera ' + (index + 1);
+                    }
+                    option.value = device.deviceId;
+                    cameraSelect.appendChild(option);
+                });
+            });
+        } else {
+            // Just hide the camera options
+            removeCameraSelect();
+            startPreview();
+        }
+    }
+
+    function getVideoDeviceSelector() {
+        var cameraSelect = document.getElementById('camera-select');
+        var defaultOptions = {
+            width: {
+                max: 1280,
+                ideal: 640
+            },
+            height: {
+                max: 960,
+                ideal: 480
+            }
+        };
+        if (cameraSelect) {
+            defaultOptions.deviceId = cameraSelect.value;
+            return defaultOptions;
+        }
+        // Otherwise just grab any device
+        return defaultOptions;
+    }
+
+    function startPreview() {
+        // I'd prefer to always use the environment facing camera. Firefox
+        // honors facingMode, iOS Safari doesn't support WebRTC at all, Android
+        // Chrome claims to but doesn't. Not sure about Opera. We'll just let
+        // the user choose an enumerated device, or use the only one.
+        var videoOptions = {
+            video: getVideoDeviceSelector(),
+            audio: false
+        };
+
+        function setVideoSource(stream) {
+            if (navigator.mozGetUserMedia) {
+                video.mozSrcObject = stream;
+            } else {
+                var vendorUrl = window.URL || window.webkitURL;
+                video.src = vendorUrl.createObjectURL(stream);
+            }
+            video.play();
+        }
+        function alertError(error) {
+            alert('An error occurred: ' + error);
+        }
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia(videoOptions).then(setVideoSource).catch(alertError);
+        } else {
+            var getUserMedia = (
+                navigator.getUserMedia ||
+                navigator.webkitGetUserMedia ||
+                navigator.mozGetUserMedia ||
+                navigator.msGetUserMedia);
+            if (getUserMedia === undefined) {
+                alert('This browser does not support video');
+            } else {
+                getUserMedia(videoOptions, setVideoSource, alertError);
+            }
+        }
+        pictureIntervalId = setInterval(takePicture, 1000);
+    }
+
+    function updateCountDown() {
+        countDown -= 1;
+        if (countDown <= 0) {
+            countDownDiv.style.display = 'none';
+            if (countDownIntervalId) {
+                clearInterval(countDownIntervalId);
+                countDownIntervalId = null;
+            }
+            if (pictureIntervalId) {
+                clearInterval(pictureIntervalId);
+                pictureIntervalId = null;
+            }
+            // Save the reference image
+            takePicture();
+            var context = canvas.getContext('2d');
+            var pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+            referenceImage = pixels;
+            imageChange.value = 0.0;
+
+            // Use a recursive function with setTimeout instead of setInterval
+            // to work around slow devices calculating diff
+            (function loop() {
+                takePicture();
+                var context = canvas.getContext('2d');
+                var rawData = context.getImageData(0, 0, width, height);
+                var difference = percentDifference(rawData, referenceImage);
+                imageChange.value = (difference + '').substring(0, 6);
+                nextCommand();
+                // TODO: Send different commands
+
+                pictureIntervalId = setTimeout(
+                    function() {
+                        if (imageChange.value < differenceThreshold) {
+                            loop();
+                        } else {
+                            toggleMonitoring();
+                        }
+                    },
+                    1000
+                );
+            })();
+        } else {
+            countDownDiv.children[0].children[0].textContent = countDown + '...';
+        }
+    }
+
+    function percentDifference(pixels1, pixels2) {
+        // On mobile, it looks like the preview is cutting off some pixels, and
+        // for some reason, the reference image is different sized from the
+        // actual photo, so be careful when iterating
+        var pixelCount = Math.min(pixels1.width * pixels1.height, pixels2.width * pixels2.height);
+        var limit = pixelCount * 4;
+        var sumDifference = 0.0;
+        for (var i = 0; i < limit; i += 4) {
+            sumDifference += Math.abs(pixels1.data[i] - pixels2.data[i]);
+            sumDifference += Math.abs(pixels1.data[i + 1] - pixels2.data[i + 1]);
+            sumDifference += Math.abs(pixels1.data[i + 2] - pixels2.data[i + 2]);
+            // Skip alpha
+        }
+        return sumDifference / (pixelCount * 256 * 3) * 100;
+    }
+
+    window.addEventListener('load', startUp, false);
+})();
+</script>
+<body>
+<div id="count-down" class="modal">
+    <div class="modal-content">
+        <p>5...</p>
+    </div>
+</div>
+<div class="content center">
+    <header>RC monitor</header>
+    <div class="hidden">
+        <video id="video">Sorry, no video stream is available</video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <div class="center">
+        <img id="photo" alt="The screen capture that will appear in this box.">
+    </div>
+</div>
+<div>
+    <div id="camera-container">
+        <div class="label">
+            <label for="Camera">Camera</label>
+        </div>
+        <div class="value">
+            <select id="camera-select">
+            </select>
+        </div>
+        <div class="content center">
+            <a id="start-preview" class="button">Start camera preview</a>
+        </div>
+    </div>
+    <div class="label">
+        <label for="frequency">Frequency MHz</label>
+    </div>
+    <div class="value">
+        <select id="frequency">
+            <option value="26.995">26.995</option>
+            <option value="27.045">27.045</option>
+            <option value="27.095">27.095</option>
+            <option value="27.145">27.145</option>
+            <option value="27.195">27.195</option>
+            <option value="27.255">27.255</option>
+            <option value="all-27">All 27</option>
+            <option value="49.830">49.830</option>
+            <option value="49.845">49.845</option>
+            <option value="49.860">49.860</option>
+            <option value="49.875">49.875</option>
+            <option value="49.890">49.890</option>
+            <option value="all-49">All 49</option>
+        </select>
+    </div>
+    <div class="label">
+        <label for="useconds">Useconds</label>
+    </div>
+    <div class="value">
+        <input id="useconds" class="parameter" value="100" type="number">
+    </div>
+    <div class="label">
+        <label for="sync-repeats">Sync repeats</label>
+    </div>
+    <div class="value">
+        <input id="sync-repeats" class="parameter" value="2" type="number">
+    </div>
+    <div class="label">
+        <label for="sync-multiplier">Sync multiplier</label>
+    </div>
+    <div class="value">
+        <input id="sync-multiplier" class="parameter" value="2" type="number">
+    </div>
+    <div class="label">
+        <label for="signal-repeats">Signal repeats</label>
+    </div>
+    <div class="value">
+        <input id="signal-repeats" class="parameter" value="5" type="number">
+    </div>
+    <div class="label">
+        <label for="image-change">Image change %</label>
+    </div>
+    <div class="value">
+        <input id="image-change" class="parameter" disabled="disabled" value="0.0">
+    </div>
+</div>
+<div class="content center">
+    <a id="toggle-monitoring" class="button">Start monitoring</a>
+</div>
+</body>
+</html>

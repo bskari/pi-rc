@@ -111,6 +111,11 @@
 #define PERIPH_PHYS_BASE 0x7e000000
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
+#elif (TEST_COMPILATION)==1
+#define PERIPH_VIRT_BASE 0x0
+#define PERIPH_PHYS_BASE 0x0
+#define DRAM_PHYS_BASE 0x0
+#define MEM_FLAG 0x0
 #else
 #error Unknown Raspberry Pi version (variable RASPI)
 #endif
@@ -227,7 +232,6 @@ struct control_data_s {
 static struct control_data_s* ctl;
 static int socket_handle = 0;
 static int tcp_socket_connection = 0;
-static int websocket = 0;
 
 struct pi_options {
     int verbose;
@@ -250,31 +254,23 @@ static int fill_buffer(
     const volatile uint32_t* dma_reg_
 );
 static int frequency_to_control(float frequency);
+static void write_samples(struct dma_cb_t* cbp, const float frequency);
+static void initialize_dma(void);
+static void initialize_mbox(void);
 static int parse_json(
     const char* json,
     struct command_node_t** new_command,
     int* request_response
 );
 static void free_command(struct command_node_t* command);
-#define BYTE unsigned char
-#define WORD unsigned int
-struct SHA1_CTX {
-    BYTE data[64];
-    WORD datalen;
-    unsigned long long bitlen;
-    WORD state[5];
-    WORD k[4];
-};
-void sha1_init(struct SHA1_CTX *ctx);
-void sha1_update(struct SHA1_CTX *ctx, const BYTE data[], size_t len);
-void sha1_final(struct SHA1_CTX *ctx, BYTE hash[]);
-void sha1_transform(struct SHA1_CTX *ctx, const BYTE data[]);
-int base64_encode(unsigned char *in, int inlen, char *out);
-const char* websocket_handshake_response(const char* const handshake);
-void decode_websocket_message(char message[]);
+static const char* post_response(const int status);
+static int decode_post_request(char* post_message, char** json_out);
 
 
 int main(int argc, char** argv) {
+#ifdef TEST_COMPILATION
+    printf("Testing on non-Pi hardware, no radio signal will be generated\n");
+#endif
     struct pi_options options = get_args(argc, argv);
     int i;
 
@@ -302,28 +298,11 @@ int main(int argc, char** argv) {
     /* The fractional part is stored in the lower 12 bits */
     float frequency = 49.830;
 
+#ifndef TEST_COMPILATION
     dma_reg = map_peripheral(DMA_VIRT_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_VIRT_BASE, PWM_LEN);
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
     gpio_reg = map_peripheral(GPIO_VIRT_BASE, GPIO_LEN);
-
-    mbox.handle = mbox_open();
-    if (mbox.handle < 0)
-        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
-    printf("Allocating physical memory: size = %d     ", NUM_PAGES * 4096);
-    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
-        fatal("Could not allocate memory.\n");
-    }
-    // TODO: How do we know that succeeded?
-    printf("mem_ref = %u     ", mbox.mem_ref);
-    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
-        fatal("Could not lock memory.\n");
-    }
-    printf("bus_addr = %x     ", mbox.bus_addr);
-    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
-        fatal("Could not map memory.\n");
-    }
-    printf("virt_addr = %p\n", mbox.virt_addr);
 
     /* GPIO4 needs to be ALT FUNC 0 to otuput the clock */
     gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 12)) | (4 << 12);
@@ -334,65 +313,26 @@ int main(int argc, char** argv) {
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;
 
     ctl = (struct control_data_s*)mbox.virt_addr;
-    struct dma_cb_t* cbp = ctl->cb;
-    uint32_t phys_sample_dst = CM_GP0DIV;
-    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
+#else
+    struct control_data_s test_struct;
+    ctl = &test_struct;
+#endif
 
-    const int frequency_control = frequency_to_control(frequency);
-    for (i = 0; i < NUM_SAMPLES; i++) {
-        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
-        /* Write a frequency sample */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
-        cbp->src = mem_virt_to_phys(ctl->sample + i);
-        cbp->dst = phys_sample_dst;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-        /* Delay */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
-        cbp->src = mem_virt_to_phys(mbox.virt_addr);
-        cbp->dst = phys_pwm_fifo_addr;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-    }
-    cbp--;
+#ifndef TEST_COMPILATION
+    initialize_mbox();
+#endif
+
+    struct dma_cb_t* cbp = ctl->cb;
+
+#ifndef TEST_COMPILATION
+    write_samples(cbp, frequency);
+#endif
+
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
-    /**
-     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
-     * which is 5us, the rate at which we want to update the GPCLK control
-     * register.
-     */
-    pwm_reg[PWM_CTL] = 0;
-    udelay(10);
-    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
-    udelay(100);
-    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
-    udelay(100);
-    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
-    udelay(100);
-    pwm_reg[PWM_RNG1] = 500;
-    udelay(10);
-    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
-    udelay(10);
-
-    /* Initialise the DMA */
-    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
-    udelay(10);
-    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
-    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
-    if (options.verbose) {
-        printf("virt %x\n", mem_virt_to_phys(ctl->cb));
-    }
-    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
-    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
+#ifndef TEST_COMPILATION
+    initialize_dma();
+#endif
 
     struct command_node_t* command = malloc(sizeof(*command));
     command->burst_us = 100.0f;
@@ -412,6 +352,19 @@ int main(int argc, char** argv) {
     if (socket_handle < 0) {
         fatal("Unable to create socket\n");
     }
+
+    if (options.tcp) {
+        int optionValue = 1;
+        const int status = setsockopt(
+                socket_handle,
+                SOL_SOCKET,
+                SO_REUSEADDR,
+                (const void *)&optionValue,
+                sizeof(int));
+        if (status) {
+            fatal("Unable to set socket options\n");
+        }
+    }
     struct sockaddr_in server_address;
     struct sockaddr_in client_address;
     socklen_t client_length = sizeof(client_address);
@@ -428,11 +381,14 @@ int main(int argc, char** argv) {
     }
 
     if (options.tcp) {
+        printf("Calling listen\n");
         const int listen_status = listen(socket_handle, 1);
         if (listen_status < 0) {
             fatal("Unable to listen\n");
         }
+        printf("Calling accept\n");
         tcp_socket_connection = accept(socket_handle, NULL, NULL);
+        printf("Done calling accept\n");
         if (tcp_socket_connection < 0) {
             fatal("Unable to accept TCP connection\n");
         }
@@ -475,8 +431,9 @@ int main(int argc, char** argv) {
                 }
             } else {
                 /* Look for another connection */
-                websocket = 0;
+                printf("Calling accept again\n");
                 tcp_socket_connection = accept(socket_handle, NULL, NULL);
+                printf("After accept tcp_socket_connection = %d\n", tcp_socket_connection);
                 if (tcp_socket_connection < 0) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         /* No connection ready, just keep running */
@@ -505,39 +462,30 @@ int main(int argc, char** argv) {
             json_buffer[bytes_count] = '\0';
             struct command_node_t* parsed_command = NULL;
             int request_response = 0;
-            /**
-             * WebSocket handshake messages have a plain GET request, so we
-             * respond with handshake message
-             */
-            if (strncmp("GET ", json_buffer, 4) == 0) {
-                const char* const response = websocket_handshake_response(json_buffer);
+            char* message = json_buffer;
+            if (strncmp("POST ", message, 5) == 0) {
+                const int status = decode_post_request(json_buffer, &message);
+                const char* const response = post_response(status);
                 send(tcp_socket_connection, response, strlen(response), 0);
-                websocket = 1;
-                continue;
-            }
-            if (websocket) {
-                decode_websocket_message(json_buffer);
-            }
-
-            /**
-             * I tried to do terminate json_buffer in decode_websocket_message,
-             * but sometimes it just doesn't work and I don't know why.
-             */
-            char* close_bracket = strstr(json_buffer, "]");
-            if (close_bracket) {
-                *(close_bracket + 1) = '\0';
+                printf("Closing TCP socket connection\n");
+                close(tcp_socket_connection);
+                tcp_socket_connection = 0;
+                if (status) {
+                    printf("Bad POST request\n");
+                    continue;
+                }
             }
 
             if (options.verbose) {
-                printf("%s\n", json_buffer);
+                printf("%s\n", message);
             }
             const int parse_status = parse_json(
-                json_buffer,
+                message,
                 &parsed_command,
                 &request_response);
             if (request_response) {
                 const int length = snprintf(
-                    json_buffer,
+                    message,
                     sizeof(json_buffer) / sizeof(json_buffer[0]),
                     "{\"time\": %d}",
                     (int)time(NULL));
@@ -592,7 +540,11 @@ int main(int argc, char** argv) {
             }
         }
 
+#ifndef TEST_COMPILATION
         const int used = fill_buffer(command, new_command, ctl, dma_reg);
+#else
+        const int used = 1;
+#endif
         if (used > 0) {
             if (new_command != NULL) {
                 free_command(command);
@@ -607,6 +559,85 @@ int main(int argc, char** argv) {
     terminate(0);
 
     return 0;
+}
+
+
+static void write_samples(struct dma_cb_t* cbp, const float frequency) {
+    int i;
+    const int frequency_control = frequency_to_control(frequency);
+    uint32_t phys_sample_dst = CM_GP0DIV;
+    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
+
+    for (i = 0; i < NUM_SAMPLES; i++) {
+        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
+        /* Write a frequency sample */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
+        cbp->src = mem_virt_to_phys(ctl->sample + i);
+        cbp->dst = phys_sample_dst;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+        /* Delay */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
+        cbp->src = mem_virt_to_phys(mbox.virt_addr);
+        cbp->dst = phys_pwm_fifo_addr;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+    }
+}
+
+
+static void initialize_dma(void) {
+    /**
+     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
+     * which is 5us, the rate at which we want to update the GPCLK control
+     * register.
+     */
+    pwm_reg[PWM_CTL] = 0;
+    udelay(10);
+    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
+    udelay(100);
+    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
+    udelay(100);
+    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
+    udelay(100);
+    pwm_reg[PWM_RNG1] = 500;
+    udelay(10);
+    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
+    udelay(10);
+
+    /* Initialise the DMA */
+    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
+    udelay(10);
+    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
+    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
+    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
+    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
+}
+
+
+static void initialize_mbox(void) {
+    mbox.handle = mbox_open();
+    if (mbox.handle < 0) {
+        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
+    }
+    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
+        fatal("Could not allocate memory.\n");
+    }
+    // TODO: How do we know that succeeded?
+    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
+        fatal("Could not lock memory.\n");
+    }
+    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
+        fatal("Could not map memory.\n");
+    }
 }
 
 
@@ -644,17 +675,17 @@ static void fatal(char* fmt, ...) {
 }
 
 
-static uint32_t mem_virt_to_phys(void* virt) {
+uint32_t mem_virt_to_phys(void* virt) {
     uint32_t offset = (uint8_t*)virt - mbox.virt_addr;
     return mbox.bus_addr + offset;
 }
 
 
-static uint32_t mem_phys_to_virt(uint32_t phys) {
+uint32_t mem_phys_to_virt(uint32_t phys) {
   return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
 }
 
-static void* map_peripheral(uint32_t base, uint32_t len) {
+void* map_peripheral(uint32_t base, uint32_t len) {
     int fd = open("/dev/mem", O_RDWR);
     void* vaddr;
 
@@ -881,7 +912,7 @@ CLEANUP:
 }
 
 
-static void free_command(struct command_node_t* command) {
+void free_command(struct command_node_t* command) {
     while (command) {
         struct command_node_t* const previous = command;
         command = command->next;
@@ -890,7 +921,7 @@ static void free_command(struct command_node_t* command) {
 }
 
 
-static struct pi_options get_args(const int argc, char* argv[]) {
+struct pi_options get_args(const int argc, char* argv[]) {
     const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
         {"verbose", no_argument, NULL, 'v'},
@@ -946,7 +977,7 @@ static struct pi_options get_args(const int argc, char* argv[]) {
 }
 
 
-static void print_usage(const char* program) {
+void print_usage(const char* program) {
     printf("Usage: %s [OPTIONS]\n", program);
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
@@ -956,278 +987,40 @@ static void print_usage(const char* program) {
 }
 
 
-const char* websocket_handshake_response(const char* const handshake) {
-    const char* const key_header = "Sec-WebSocket-Key: ";
-    const char* const start = strstr(handshake, key_header);
-    static char buffer[512];
-    char hash[20];
-
-    const int key_length = strstr(start, "\n") - start - strlen(key_header) - 1;
-    const char* const start_key = start + strlen(key_header);
-    char key[64];
-    /**
-     * The response needs to include base64(SHA-1(key +
-     * "258EAFA5-E914-47DA-95CA-C5AB0DC85B11))
-     */
-    strncpy(key, start_key, key_length);
-    key[key_length] = '\0';
-    strncpy(buffer, key, key_length);
-    strcpy(buffer + key_length, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    struct SHA1_CTX sha1_context;
-    sha1_init(&sha1_context);
-    sha1_update(&sha1_context, (BYTE*)buffer, strlen(buffer));
-    sha1_final(&sha1_context, (BYTE*)hash);
-    const int length = base64_encode((BYTE*)hash, 20, key);
-    key[length] = '\0';
-
-    snprintf(
-        buffer,
-        sizeof(buffer) / sizeof(buffer[0]),
-        "HTTP/1.1 101 Web Sockt Protocol Handshake\r\n"
-            "Upgrade: WebSocket\r\n"
-            "Connection: Upgrade\r\n"
-            "Sec-WebSocket-Accept: %s\r\n"
-            "Acces-Control-Allow-Headers: x-websocket-protocol\r\n\r\n",
-        key);
-    return buffer;
+const char* post_response(const int status) {
+    if (status == 0) {
+        return
+"HTTP/1.0 200 OK\r\n\
+Content-Type: text/plain\r\n";
+    }
+    return
+"HTTP/1.0 422 Unprocessable\r\n\
+Content-Type: text/plain\r\n";
 }
 
 
-void decode_websocket_message(char message[]) {
-    uint8_t masking_key[4];
-    char buffer[BUFFER_SIZE];
-    /* Skip the flags */
-    const char* iter = &message[1];
-    int payload_length = *iter;
-    ++iter;
-    if (payload_length == 0xfe) {
-        payload_length = ntohs(*((uint16_t*)iter));
-        iter += sizeof(uint16_t);
+int decode_post_request(char* message, char** buffer) {
+	// Find two CRLFs in a row to get data
+    message = strstr(message, "\r\n\r\n");
+    if (!message) {
+        // Invalid POST
+        return 1;
     }
-    strncpy((char*)masking_key, iter, sizeof(masking_key) / sizeof(masking_key[0]));
-    iter += sizeof(masking_key) / sizeof(masking_key[0]);
-    strncpy(buffer, iter, payload_length);
-    int i;
-    for (i = 0; i < payload_length; ++i) {
-        /**
-         * This is one of the weirdest bugs I've ever seen, but occasionally,
-         * when receiving messages from a browser, this code will decode about
-         * 1/4 of the message, and then fill the rest with some random garbage
-         * byte(s). I've printed the buffer before messing with it and it looks
-         * right, and decoding with the key values in Python looks right. I
-         * can't read ARM assembly enough to know if the assembly is right.
-         * Valgrind doesn't notice anything wrong either.
-         */
-        message[i] = buffer[i] ^ masking_key[i % 4];
+    message += 4;
+
+    // Find the parameter
+    while (*message != '=') {
+        ++message;
     }
-    message[payload_length] = '\0';
-}
-
-
-/*********************************************************************
-* Filename:   sha1.c
-* Author:     Brad Conte (brad AT bradconte.com)
-* Copyright:
-* Disclaimer: This code is presented "as is" without any guarantees.
-* Details:    Implementation of the SHA1 hashing algorithm.
-              Algorithm specification can be found here:
-               * http://csrc.nist.gov/publications/fips/fips180-2/fips180-2withchangenotice.pdf
-              This implementation uses little endian byte order.
-*********************************************************************/
-
-
-/****************************** MACROS ******************************/
-#define ROTLEFT(a, b) ((a << b) | (a >> (32 - b)))
-
-/*********************** FUNCTION DEFINITIONS ***********************/
-void sha1_transform(struct SHA1_CTX *ctx, const BYTE data[])
-{
-    WORD a, b, c, d, e, i, j, t, m[80];
-
-    for (i = 0, j = 0; i < 16; ++i, j += 4)
-        m[i] = (data[j] << 24) + (data[j + 1] << 16) + (data[j + 2] << 8) + (data[j + 3]);
-    for ( ; i < 80; ++i) {
-        m[i] = (m[i - 3] ^ m[i - 8] ^ m[i - 14] ^ m[i - 16]);
-        m[i] = (m[i] << 1) | (m[i] >> 31);
-    }
-
-    a = ctx->state[0];
-    b = ctx->state[1];
-    c = ctx->state[2];
-    d = ctx->state[3];
-    e = ctx->state[4];
-
-    for (i = 0; i < 20; ++i) {
-        t = ROTLEFT(a, 5) + ((b & c) ^ (~b & d)) + e + ctx->k[0] + m[i];
-        e = d;
-        d = c;
-        c = ROTLEFT(b, 30);
-        b = a;
-        a = t;
-    }
-    for ( ; i < 40; ++i) {
-        t = ROTLEFT(a, 5) + (b ^ c ^ d) + e + ctx->k[1] + m[i];
-        e = d;
-        d = c;
-        c = ROTLEFT(b, 30);
-        b = a;
-        a = t;
-    }
-    for ( ; i < 60; ++i) {
-        t = ROTLEFT(a, 5) + ((b & c) ^ (b & d) ^ (c & d))  + e + ctx->k[2] + m[i];
-        e = d;
-        d = c;
-        c = ROTLEFT(b, 30);
-        b = a;
-        a = t;
-    }
-    for ( ; i < 80; ++i) {
-        t = ROTLEFT(a, 5) + (b ^ c ^ d) + e + ctx->k[3] + m[i];
-        e = d;
-        d = c;
-        c = ROTLEFT(b, 30);
-        b = a;
-        a = t;
-    }
-
-    ctx->state[0] += a;
-    ctx->state[1] += b;
-    ctx->state[2] += c;
-    ctx->state[3] += d;
-    ctx->state[4] += e;
-}
-
-void sha1_init(struct SHA1_CTX *ctx)
-{
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x67452301;
-    ctx->state[1] = 0xEFCDAB89;
-    ctx->state[2] = 0x98BADCFE;
-    ctx->state[3] = 0x10325476;
-    ctx->state[4] = 0xc3d2e1f0;
-    ctx->k[0] = 0x5a827999;
-    ctx->k[1] = 0x6ed9eba1;
-    ctx->k[2] = 0x8f1bbcdc;
-    ctx->k[3] = 0xca62c1d6;
-}
-
-void sha1_update(struct SHA1_CTX *ctx, const BYTE data[], size_t len)
-{
-    size_t i;
-
-    for (i = 0; i < len; ++i) {
-        ctx->data[ctx->datalen] = data[i];
-        ctx->datalen++;
-        if (ctx->datalen == 64) {
-            sha1_transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
+    ++message;
+    *buffer = message;
+    // There shouldn't be any other parameters, but just in case, scan to the
+    // end
+    while (*message) {
+        if (*message == '=') {
+            return 2;
         }
+        ++message;
     }
-}
-
-void sha1_final(struct SHA1_CTX *ctx, BYTE hash[])
-{
-    WORD i;
-
-    i = ctx->datalen;
-
-    /* Pad whatever data is left in the buffer. */
-    if (ctx->datalen < 56) {
-        ctx->data[i++] = 0x80;
-        while (i < 56)
-            ctx->data[i++] = 0x00;
-    }
-    else {
-        ctx->data[i++] = 0x80;
-        while (i < 64)
-            ctx->data[i++] = 0x00;
-        sha1_transform(ctx, ctx->data);
-        memset(ctx->data, 0, 56);
-    }
-
-    /**
-     * Append to the padding the total message's length in bits and transform.
-     */
-    ctx->bitlen += ctx->datalen * 8;
-    ctx->data[63] = ctx->bitlen;
-    ctx->data[62] = ctx->bitlen >> 8;
-    ctx->data[61] = ctx->bitlen >> 16;
-    ctx->data[60] = ctx->bitlen >> 24;
-    ctx->data[59] = ctx->bitlen >> 32;
-    ctx->data[58] = ctx->bitlen >> 40;
-    ctx->data[57] = ctx->bitlen >> 48;
-    ctx->data[56] = ctx->bitlen >> 56;
-    sha1_transform(ctx, ctx->data);
-
-    /**
-     * Since this implementation uses little endian byte ordering and MD uses big endian,
-     * reverse all the bytes when copying the final state to the output hash.
-     */
-    for (i = 0; i < 4; ++i) {
-        hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
-        hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
-        hash[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
-        hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
-        hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
-    }
-}
-
-
-/* This is a public domain base64 implementation written by WEI Zhicheng. */
-/* BASE 64 encode table */
-static char base64en[] = {
-    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-    'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P',
-    'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',
-    'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f',
-    'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-    'o', 'p', 'q', 'r', 's', 't', 'u', 'v',
-    'w', 'x', 'y', 'z', '0', '1', '2', '3',
-    '4', '5', '6', '7', '8', '9', '+', '/',
-};
-
-#define BASE64_PAD  '='
-
-
-#define BASE64DE_FIRST  '+'
-#define BASE64DE_LAST   'z'
-
-int
-base64_encode(unsigned char *in, int inlen, char *out)
-{
-    int i, j;
-
-    for (i = j = 0; i < inlen; i++) {
-        int s = i % 3;          /* from 6/gcd(6, 8) */
-
-        switch (s) {
-        case 0:
-            out[j++] = base64en[(in[i] >> 2) & 0x3F];
-            continue;
-        case 1:
-            out[j++] = base64en[((in[i-1] & 0x3) << 4) + ((in[i] >> 4) & 0xF)];
-            continue;
-        case 2:
-            out[j++] = base64en[((in[i-1] & 0xF) << 2) + ((in[i] >> 6) & 0x3)];
-            out[j++] = base64en[in[i] & 0x3F];
-        default:;
-        }
-    }
-
-    /* move back */
-    i -= 1;
-
-    /* check the last and add padding */
-    if ((i % 3) == 0) {
-        out[j++] = base64en[(in[i] & 0x3) << 4];
-        out[j++] = BASE64_PAD;
-        out[j++] = BASE64_PAD;
-    } else if ((i % 3) == 1) {
-        out[j++] = base64en[(in[i] & 0xF) << 2];
-        out[j++] = BASE64_PAD;
-    }
-
-    return j;
+    return 0;
 }

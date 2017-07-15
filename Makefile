@@ -11,6 +11,10 @@ ifeq ($(UNAME), armv6l)
 	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=1
 else ifeq ($(UNAME), armv7l)
 	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=2
+else ifeq ($(UNAME), x86_64)
+	# Options for testing on non-Pi hardware
+	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -g -Wno-pointer-to-int-cast \
+		-Wno-unused-function -DTEST_COMPILATION=1
 else
 	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS}
 endif

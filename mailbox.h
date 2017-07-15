@@ -34,7 +34,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DEVICE_FILE_NAME "/dev/vcio"
 #define LOCAL_DEVICE_FILE_NAME "mbox"
 
-int mbox_open();
+int mbox_open(void);
 void mbox_close(int file_desc);
 
 unsigned get_version(int file_desc);
