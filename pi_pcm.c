@@ -313,8 +313,8 @@ int main(int argc, char** argv) {
     udelay(100);
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;
 
-    ctl = (struct control_data_s*)mbox.virt_addr;
     initialize_mbox();
+    ctl = (struct control_data_s*)mbox.virt_addr;
 #else
     struct control_data_s test_struct;
     ctl = &test_struct;

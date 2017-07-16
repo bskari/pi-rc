@@ -8,15 +8,15 @@ C_WARNING_FLAGS := -Wmissing-prototypes -Wmissing-declarations \
     -Wstrict-prototypes
 
 ifeq ($(UNAME), armv6l)
-	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=1
+	override CFLAGS += ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=1
 else ifeq ($(UNAME), armv7l)
-	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=2
+	override CFLAGS += ${WARNING_FLAGS} ${C_WARNING_FLAGS} -DRASPI=2
 else ifeq ($(UNAME), x86_64)
 	# Options for testing on non-Pi hardware
-	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS} -g -Wno-pointer-to-int-cast \
+	override CFLAGS += ${WARNING_FLAGS} ${C_WARNING_FLAGS} -g -Wno-pointer-to-int-cast \
 		-Wno-unused-function -DTEST_COMPILATION=1
 else
-	CFLAGS := ${WARNING_FLAGS} ${C_WARNING_FLAGS}
+	override CFLAGS += ${WARNING_FLAGS} ${C_WARNING_FLAGS}
 endif
 
 LDLIBS := -lm -ljansson
