@@ -415,7 +415,6 @@ header {
                 imageChange.value = (difference + '').substring(0, 6);
                 nextCommand();
                 sendCommand();
-                // TODO: Send different commands
 
                 pictureIntervalId = setTimeout(
                     function() {
@@ -423,6 +422,7 @@ header {
                             loop();
                         } else {
                             toggleMonitoring();
+                            saveConfigToWebStorage();
                         }
                     },
                     1000
@@ -447,6 +447,23 @@ header {
             // Skip alpha
         }
         return sumDifference / (pixelCount * 256 * 3) * 100;
+    }
+
+    function saveConfigToWebStorage() {
+        var frequency = parseFloat(document.getElementById('frequency').value);
+        var useconds = parseInt(document.getElementById('useconds').value);
+        var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
+        var syncRepeats = parseInt(document.getElementById('sync-repeats').value);
+        var signalRepeats = parseInt(document.getElementById('signal-repeats').value);
+        var config = JSON.stringify({
+            'frequency': frequency,
+            'synchronization_burst_us': useconds * syncMultiplier,
+            'synchronization_spacing_us': useconds,
+            'total_synchronizations': syncRepeats,
+            'signal_burst_us': useconds,
+            'signal_spacing_us': useconds,
+        });
+        window.localStorage.setItem('piRcConfig', JSON.stringify(config));
     }
 
     window.addEventListener('load', startUp, false);
