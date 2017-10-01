@@ -37,30 +37,30 @@ you'll need to install the Jansson JSON-parsing library. Run:
 and then try compiling again.
 
 Every RC car I've seen uses a different set of command codes, so you'll need to
-run another program that iterates through possible command codes and watches
+use another program that iterates through possible command codes and watches
 the RC car to see if it responds. Once it does, it will save the image and the
 command that caused the car to move.
 
-To run this search, you'll need a computer with a webcam with `streamer`
-installed, or a Raspberry Pi with a camera module. To install streamer, run:
+To run this search, you'll need a computer with a webcam or an Android phone.
+iPhones won't work because Safari doesn't allow access to the camera.
+Run `./pi_pcm -v` on the  Raspberry Pi so that it can start broadcasting
+commands. Also run `python host_files.py` on the Raspberry Pi, and open a
+browser (Firefox or Chrome have been tested and verified as working) and visit
+https://<Pi-IP-address>:4443/watch.html.
 
-    apt-get install streamer
-
-You can run this search program on the Raspberry Pi or a separate computer.
 Place the car in an area where you can control the lighting and avoid changes
 in ambient lighting, such as a closet, and turn the car on. If your car is
 darkly colored, try to place it against a white background, for example by
-putting a piece of paper behind it. Point the webcam at it and run:
-
-    python watch.py -f [frequency] -s [Pi IP address]
-
-where frequency is the radio control frequency of the RC car. Most toy-grade RC
-cars run in the 27 or 49 MHz band, which should be printed on the car. Most
+putting a piece of paper behind it. Point the webcam at it. In the web page,
+set the frequency to the car's frequency. Most toy-grade RC cars in the US
+run in the 27 or 49 MHz band, which should be printed on the car. Most
 cars run in a specific frequency in the 27 or 49 MHz band, such as 27.255; if
-you don't know the car's exact frequency, the program will incrementally search
-all of them if you specify 27 or 49. Once the program sees the car move, it
-will save the image of the car moving with a file named with the parameters
-of the command that it just broadcast.
+you don't know the car's exact frequency, just pick the middle value in that
+range, e.g. 49.860 MHz for 49 MHz. Click "Start Monitoring". The web page will
+start sending different commands and checking for movement.
+
+Once the browser sees the car move, the image from the webcam will freeze and
+the parameters of the command that it just broadcast will be preserved.
 
 Now that you have the basic command structure, you can search for the specific
 commands to make it drive. Run
@@ -96,11 +96,8 @@ battery pack for the Raspberry Pi, taping it to the top of the car, and turning
 it into an autonomous vehicle. I've tried to make it easy to send commands to
 the controller program.
 
-The `pi_pcm` program listens for JSON-formatted commands over UDP port 12345 by
-default. I chose UDP because I figured most commands would be sent locally from
-the Raspberry Pi anyway, and you can just repeatedly send commands to it, say
-10 times a second; the car will continue to respond to the last message
-received.
+The `pi_pcm` program listens for JSON-formatted commands over TCP port 12345 by
+default. You can also have it listen over UDP by using the `-u` option.
 
 Messages are formatted as an array of objects with the following fields defined:
 
@@ -157,11 +154,3 @@ where the first object is the synchronization signal and the second is the
 command signal.  The Pi will continue broadcasting a given command until a new
 command is received. If you want to stop the car from moving, try sending a
 signal repeat that doesn't correspond to any action from the RC car.
-
-I chose to use UDP for listening for commands. If you're worried about messages
-being dropped, you can include the parameter
-
-    "request_response": true
-
-in one of your objects. The server will send a response message over UDP to the
-port one above from the port that the client sent the message from.

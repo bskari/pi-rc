@@ -33,8 +33,6 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
             # sounds hard
             content_length = int(self.headers.getheader('Content-Length'))
             post_data = self.rfile.read(content_length)
-            # Strip off 'data='
-            post_data = post_data.split('=')[1]
             print(post_data)
 
             try:
@@ -65,7 +63,7 @@ def main():
             pass
     except IOError:
         print(
-'''Android requires HTTPS to access the webcam. This script can serve HTTPS
+'''Chrome requires HTTPS to access the webcam. This script can serve HTTPS
 requests, but requires that a self-signed certificate be generated first. When
 you access this page, you will get a warning - just click through it. This
 script will now generate a self-signed certificate.'''
@@ -89,7 +87,8 @@ script will now generate a self-signed certificate.'''
         ))
 
     print('Starting server')
-    server_address = ('0.0.0.0', 4443)
+    port = 4443
+    server_address = ('0.0.0.0', port)
     httpd = Server(server_address, PostCommandsRequestHandler)
     httpd.socket = ssl.wrap_socket(
         httpd.socket,
@@ -98,7 +97,7 @@ script will now generate a self-signed certificate.'''
         keyfile='{}.key'.format(base_cert_file_name),
         ssl_version=ssl.PROTOCOL_TLSv1
     )
-    print('Running server')
+    print('Running server on https://localhost:4443/')
     httpd.serve_forever()
 
 

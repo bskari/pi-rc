@@ -55,7 +55,7 @@ header {
     display: none;
 }
 .modal {
-	display: none;
+    display: none;
     position: fixed;
     z-index: 1;
     left: 0;
@@ -67,10 +67,10 @@ header {
     background-color: rgba(0, 0, 0, 0.4);
 }
 .modal-content {
-	background-color: white;
+    background-color: white;
     text-align: center;
-	margin: 15% auto;
-	padding: 20px;
+    margin: 15% auto;
+    padding: 20px;
     border: 1px solid black;
     width: 20%;
 }
@@ -105,6 +105,35 @@ header {
         countDownDiv = document.getElementById('count-down');
         imageChange = document.getElementById('image-change');
 
+        if (window.location.protocol == 'file:') {
+            var errorP = document.querySelector('#error');
+            errorP.appendChild(
+                document.createTextNode(
+                    'This file needs to be served over HTTPS to access the webcam.'));
+            errorP.appendChild(document.createElement('br'));
+            errorP.appendChild(
+                document.createTextNode(
+                    'Please run `python host_files.py` and visit '));
+            var linkElement = document.createElement('a');
+            var url = 'https://localhost:4443/watch.html';
+            linkElement.appendChild(document.createTextNode(url));
+            linkElement.title = url;
+            linkElement.href = url;
+            errorP.appendChild(linkElement);
+            errorP.appendChild(document.createElement('br'));
+            var certificateInstructions = 'You will need to accept the self-signed certificate by '
+            // If Firefox
+            if (typeof InstallTrigger !== 'undefined') {
+                certificateInstructions += 'clicking "Advanced", "Add Exception", and "Confirm Security Exception".';
+            } else {
+                certificateInstructions += 'clicking "Advanced" and "Proceed to localhost (unsafe)".';
+            }
+            errorP.appendChild(document.createTextNode(certificateInstructions));
+
+            errorP.classList.remove('hidden');
+            return;
+        }
+
         video.addEventListener('canplay', function(event) {
             if (!streaming) {
                 height = video.videoHeight / (video.videoWidth / width);
@@ -134,6 +163,10 @@ header {
         }, false);
 
         clearPhoto();
+    }
+
+    function alertError(error) {
+        alert('An error occurred: ' + error);
     }
 
     function toggleMonitoring() {
@@ -226,6 +259,38 @@ header {
         document.getElementById('signal-repeats').value = signalRepeats;
     }
 
+    function sendCommand() {
+        var command = [];
+        var frequency = parseFloat(document.getElementById('frequency').value);
+        var deadFrequency = frequency < 28 ? 49.860 : 27.095;
+        var useconds = parseInt(document.getElementById('useconds').value);
+        var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
+        var syncRepeats = parseInt(document.getElementById('sync-repeats').value);
+        var signalRepeats = parseInt(document.getElementById('signal-repeats').value);
+        var command = [
+            {
+                frequency: frequency,
+                dead_frequency: deadFrequency,
+                burst_us: useconds * syncMultiplier,
+                spacing_us: useconds,
+                repeats: syncRepeats,
+            },
+            {
+                frequency: frequency,
+                dead_frequency: deadFrequency,
+                burst_us: useconds,
+                spacing_us: useconds,
+                repeats: signalRepeats,
+            }
+        ];
+
+        var request = new XMLHttpRequest();
+        request.addEventListener(error, alertError);
+        request.open('POST', window.location.origin + '/command/');
+        request.setRequestHeader('Content-Type', 'application/json');
+        request.send(JSON.stringify(command));
+    }
+
     // This function should only be called once
     function enumerateDevices() {
         function removeCameraSelect() {
@@ -304,9 +369,6 @@ header {
             }
             video.play();
         }
-        function alertError(error) {
-            alert('An error occurred: ' + error);
-        }
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             navigator.mediaDevices.getUserMedia(videoOptions).then(setVideoSource).catch(alertError);
         } else {
@@ -352,6 +414,7 @@ header {
                 var difference = percentDifference(rawData, referenceImage);
                 imageChange.value = (difference + '').substring(0, 6);
                 nextCommand();
+                sendCommand();
                 // TODO: Send different commands
 
                 pictureIntervalId = setTimeout(
@@ -404,6 +467,7 @@ header {
     <div class="center">
         <img id="photo" alt="The screen capture that will appear in this box.">
     </div>
+    <p id="error" class="hidden"></p>
 </div>
 <div>
     <div id="camera-container">
@@ -429,38 +493,36 @@ header {
             <option value="27.145">27.145</option>
             <option value="27.195">27.195</option>
             <option value="27.255">27.255</option>
-            <option value="all-27">All 27</option>
             <option value="49.830">49.830</option>
             <option value="49.845">49.845</option>
             <option value="49.860">49.860</option>
             <option value="49.875">49.875</option>
             <option value="49.890">49.890</option>
-            <option value="all-49">All 49</option>
         </select>
     </div>
     <div class="label">
         <label for="useconds">Useconds</label>
     </div>
     <div class="value">
-        <input id="useconds" class="parameter" value="100" type="number">
+        <input id="useconds" class="parameter" value="100" type="number" step="1">
     </div>
     <div class="label">
         <label for="sync-repeats">Sync repeats</label>
     </div>
     <div class="value">
-        <input id="sync-repeats" class="parameter" value="2" type="number">
+        <input id="sync-repeats" class="parameter" value="2" type="number" step="1">
     </div>
     <div class="label">
         <label for="sync-multiplier">Sync multiplier</label>
     </div>
     <div class="value">
-        <input id="sync-multiplier" class="parameter" value="2" type="number">
+        <input id="sync-multiplier" class="parameter" value="2" type="number" step="1">
     </div>
     <div class="label">
         <label for="signal-repeats">Signal repeats</label>
     </div>
     <div class="value">
-        <input id="signal-repeats" class="parameter" value="5" type="number">
+        <input id="signal-repeats" class="parameter" value="5" type="number" step="1">
     </div>
     <div class="label">
         <label for="image-change">Image change %</label>
