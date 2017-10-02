@@ -1,6 +1,6 @@
 """Hosts files from the local directory using SSL."""
 from __future__ import print_function
-import requests
+import socket
 import ssl
 import subprocess
 import sys
@@ -9,11 +9,22 @@ import sys
 if sys.version_info.major < 3:
     import SimpleHTTPServer
     import SocketServer
+    import urllib
     Server = SocketServer.TCPServer
     SimpleHTTPRequestHandler = SimpleHTTPServer.SimpleHTTPRequestHandler
+    urlopen = urllib.urlopen
 else:
     from http.server import SimpleHTTPRequestHandler, HTTPServer  # pylint: disable=E0401
     Server = HTTPServer  # pylint: disable=C0103
+    import urllib.request
+    urlopen = urllib.request.urlopen
+
+
+def send_post(url, encoded_data):
+    response = urlopen(url, encoded_data)
+    response.read()
+    response.close()
+    return response.getcode()
 
 
 class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R0903
@@ -31,23 +42,22 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
         if self.path == '/command/':
             # Forward this request on to the C server, because doing SSL in C
             # sounds hard
-            content_length = int(self.headers.getheader('Content-Length'))
+            content_length = int(self.headers.get('Content-Length'))
             post_data = self.rfile.read(content_length)
             print(post_data)
 
             try:
-                post_request = requests.post(
-                    'http://localhost:12345',
-                    data={'data': post_data},
-                    timeout=0.25
+                response_status_code = send_post(
+                    'http://localhost:12345/',
+                    b'data=' + post_data
                 )
-            except:
-                print('Sending 500')
+            except Exception as exc:
+                print('{}, sending 500'.format(exc))
                 self.send_response(500)
                 self.end_headers()
                 return
 
-            self.send_response(post_request.status_code)
+            self.send_response(response_status_code)
             self.end_headers()
             return
 
@@ -57,6 +67,9 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
 
 def main():
     """Main."""
+    # The URL fetching stuff inherits this timeout
+    socket.setdefaulttimeout(0.25)
+
     base_cert_file_name = 'www.pi-rc.com'
     try:
         with open(base_cert_file_name + '.cert'):
