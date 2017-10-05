@@ -110,7 +110,7 @@ header {
         imageChange = document.getElementById('image-change');
 
         if (window.location.protocol == 'file:') {
-            var infoP = document.querySelector('#info');
+            var infoP = document.getElementById('info');
             infoP.appendChild(
                 document.createTextNode(
                     'This file needs to be served over HTTPS to access the webcam.'));
@@ -459,7 +459,10 @@ header {
                         } else {
                             toggleMonitoring();
                             saveConfigToWebStorage();
-                            var infoP = document.querySelector('#info');
+                            var infoP = document.getElementById('info');
+                            while (infoP.childNodes.length > 0) {
+                                infoP.removeChild(infoP.childNodes[0]);
+                            }
                             infoP.appendChild(
                                 document.createTextNode(
                                     'Movement detected, parameters saved. Visit '));
@@ -471,7 +474,7 @@ header {
                             infoP.appendChild(linkElement);
                             infoP.appendChild(
                                 document.createTextNode(
-                                    ' to set the individual commands'));
+                                    ' to set the individual commands.'));
                             infoP.classList.remove('hidden');
                         }
                     },
