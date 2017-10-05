@@ -106,12 +106,12 @@ header {
         imageChange = document.getElementById('image-change');
 
         if (window.location.protocol == 'file:') {
-            var errorP = document.querySelector('#error');
-            errorP.appendChild(
+            var infoP = document.querySelector('#info');
+            infoP.appendChild(
                 document.createTextNode(
                     'This file needs to be served over HTTPS to access the webcam.'));
-            errorP.appendChild(document.createElement('br'));
-            errorP.appendChild(
+            infoP.appendChild(document.createElement('br'));
+            infoP.appendChild(
                 document.createTextNode(
                     'Please run `python host_files.py` and visit '));
             var linkElement = document.createElement('a');
@@ -119,8 +119,8 @@ header {
             linkElement.appendChild(document.createTextNode(url));
             linkElement.title = url;
             linkElement.href = url;
-            errorP.appendChild(linkElement);
-            errorP.appendChild(document.createElement('br'));
+            infoP.appendChild(linkElement);
+            infoP.appendChild(document.createElement('br'));
             var certificateInstructions = 'You will need to accept the self-signed certificate by '
             // If Firefox
             if (typeof InstallTrigger !== 'undefined') {
@@ -128,9 +128,9 @@ header {
             } else {
                 certificateInstructions += 'clicking "Advanced" and "Proceed to localhost (unsafe)".';
             }
-            errorP.appendChild(document.createTextNode(certificateInstructions));
+            infoP.appendChild(document.createTextNode(certificateInstructions));
 
-            errorP.classList.remove('hidden');
+            infoP.classList.remove('hidden');
             return;
         }
 
@@ -285,7 +285,7 @@ header {
         ];
 
         var request = new XMLHttpRequest();
-        request.addEventListener(error, alertError);
+        request.addEventListener(info, alertError);
         request.open('POST', window.location.origin + '/command/');
         request.setRequestHeader('Content-Type', 'application/json');
         request.send(JSON.stringify(command));
@@ -423,6 +423,20 @@ header {
                         } else {
                             toggleMonitoring();
                             saveConfigToWebStorage();
+                            var infoP = document.querySelector('#info');
+                            infoP.appendChild(
+                                document.createTextNode(
+                                    'Movement detected, parameters saved. Visit '));
+                            var linkElement = document.createElement('a');
+                            var url = '/control.html';
+                            linkElement.appendChild(document.createTextNode('control.html'));
+                            linkElement.title = url;
+                            linkElement.href = url;
+                            infoP.appendChild(linkElement);
+                            infoP.appendChild(
+                                document.createTextNode(
+                                    ' to set the individual commands'));
+                            infoP.classList.remove('hidden');
                         }
                     },
                     1000
@@ -463,7 +477,7 @@ header {
             'signal_burst_us': useconds,
             'signal_spacing_us': useconds,
         });
-        window.localStorage.setItem('piRcConfig', JSON.stringify(config));
+        window.localStorage.setItem('piRcConfig', config);
     }
 
     window.addEventListener('load', startUp, false);
@@ -484,7 +498,7 @@ header {
     <div class="center">
         <img id="photo" alt="The screen capture that will appear in this box.">
     </div>
-    <p id="error" class="hidden"></p>
+    <p id="info" class="hidden"></p>
 </div>
 <div>
     <div id="camera-container">
