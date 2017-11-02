@@ -134,9 +134,8 @@ function sendControlMessage(evt) {
     xhr.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
     xhr.onreadystatechange = function() {
         if (xhr.readyState === XMLHttpRequest.DONE) {
-            if (xhr.status === 200) {
-                // All good
-            } else {
+            // Any success code is fine
+            if (!('' + xhr.status).startsWith('2')) {
                 writeMessage('Bad response received, HTTP code: ' + xhr.status);
             }
         }
@@ -148,7 +147,13 @@ function sendControlMessage(evt) {
 }
 function keyHandler(evt, down) {
     evt = evt || window.evt;
-    var key = evt.key || evt.srcElement || evt.keyCode || evt.which || evt.changedTouches[0].target;
+    var key = evt.key || evt.srcElement || evt.keyCode;
+    if (key === undefined && evt.changedTouches) {
+        key = event.changedTouches[0].target;
+    }
+    if (key === undefined && evt.type.startsWith('mouse')) {
+        key = evt.target;
+    }
     var needUpdate = false;  // We'll use this to ignore key repeats
 
     if (key === 'ArrowUp' || key === 38 || key === document.getElementById('forward-button')) {  // Up
@@ -224,7 +229,6 @@ body.addEventListener('keydown', function (evt) { keyHandler(evt, true); });
 body.addEventListener('keyup', function (evt) { keyHandler(evt, false); });
 for (var option in optionToId) {
     element = document.getElementById(optionToId[option]);
-    console.log(element);
     element.addEventListener('focus', function (evt) {
         evt.preventDefault();
         evt.target.classList.remove('unset');

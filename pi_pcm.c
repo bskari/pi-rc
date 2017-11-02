@@ -972,7 +972,7 @@ void print_usage(const char* program) {
 const char* post_response(const int status) {
     if (status == 0) {
         return
-"HTTP/1.0 200 OK\r\n\
+"HTTP/1.0 204 NO CONTENT\r\n\
 Content-Type: text/plain\r\n";
     }
     return

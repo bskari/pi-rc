@@ -74,6 +74,10 @@ header {
     border: 1px solid black;
     width: 20%;
 }
+#help {
+    width: 600px;
+    display: none;
+}
 </style>
 <script>
 (function() {
@@ -161,6 +165,9 @@ header {
             event.preventDefault();
             startPreview();
         }, false);
+        document.getElementById('help-header').addEventListener('click', function(event) {
+            document.getElementById('help').style.display = 'block';
+        });
 
         clearPhoto();
     }
@@ -177,6 +184,10 @@ header {
             countDownDiv.children[0].children[0].textContent = countDown + '...';
             countDownDiv.style.display = 'block';
             countDownIntervalId = setInterval(updateCountDown, 1000);
+            var infoP = document.querySelector('#info');
+            while (infoP.hasChildNodes()) {
+                infoP.removeChild(infoP.lastChild);
+            }
         } else {
             monitorButton.text = 'Start monitoring';
             countDown = 0;
@@ -285,11 +296,36 @@ header {
         ];
 
         var request = new XMLHttpRequest();
-        request.addEventListener(info, alertError);
+        request.onerror = function() {
+            alert('Unable to contact the Python server: is host_files.py running?');
+        };
+        request.onreadystatechange = createReadyStateChangeCallback(request);
         request.open('POST', window.location.origin + '/command/');
         request.setRequestHeader('Content-Type', 'application/json');
         request.send(JSON.stringify(command));
     }
+
+    function createReadyStateChangeCallback(request) {
+        return function() {
+            if (request.readyState === XMLHttpRequest.DONE) {
+                // Any success status code is fine
+                if (!('' + request.status).startsWith('2')) {
+                    var message;
+                    if (request.status === 500) {
+                        message = 'Unable to contact the server: is pi_pcm running?';
+                    } else {
+                        message = request.statusText || 'Unknown error';
+                    }
+                    alert('Error sending command: ' + message);
+                    if (pictureIntervalId) {
+                        toggleMonitoring();
+                        clearInterval(pictureIntervalId);
+                        pictureIntervalId = null;
+                    }
+                }
+            }
+        }
+    };
 
     // This function should only be called once
     function enumerateDevices() {
@@ -448,6 +484,10 @@ header {
     }
 
     function percentDifference(pixels1, pixels2) {
+        // This happens when we stop monitoring, just ignore it
+        if (pixels2 === null) {
+            return 0.0;
+        }
         // On mobile, it looks like the preview is cutting off some pixels, and
         // for some reason, the reference image is different sized from the
         // actual photo, so be careful when iterating
@@ -483,6 +523,7 @@ header {
     window.addEventListener('load', startUp, false);
 })();
 </script>
+</head>
 <body>
 <div id="count-down" class="modal">
     <div class="modal-content">
@@ -503,7 +544,7 @@ header {
 <div>
     <div id="camera-container">
         <div class="label">
-            <label for="Camera">Camera</label>
+            <label for="camera-select">Camera</label>
         </div>
         <div class="value">
             <select id="camera-select">
@@ -564,6 +605,35 @@ header {
 </div>
 <div class="content center">
     <a id="toggle-monitoring" class="button">Start monitoring</a>
+</div>
+<p id="help-header" class="center">Help &#x25BC;</p>
+<div id="help" class="center">
+    <p>
+This page will help you search for command codes for your RC car. It does so by
+repeatedly broadcasting RC commands and using a webcam to see if the car moves.
+Once the car does move, the parameters will be saved and you will be redirected
+to the control page where you can test and drive the car interactively.
+    </p>
+    <p>
+pi-rc only works with simple cars, such as those that can only move forward and
+reverse and left and right. More complicated controls, such as ones that have
+proportional steering or throttle, will likely not work.
+    </p>
+    <p>
+To start, run <code>pi_pcm</code> on the Raspberry Pi. Set the frequency of the
+in the above "Frequency MHz" selector. In the United States, most cheap RC cars
+run in either the 27 MHz or the 49 MHz band. This should be labelled on the car
+itself. If you the car doesn't list the exact frequency (such as 26.995 MHz),
+then select the middle frequency in that band (e.g. 27.095 for 27 MHz). Then,
+place the car in front of the webcam in a location with consistent lighting,
+i.e. away from sunlight. Then click "Start Monitoring". Once the car moves, the
+parameters will be saved and you will be directed to the control page.
+    </p>
+    <p>
+This page should work in Firefox and Chrome on the desktop computers, and on
+Firefox, Chrome, and the Android browser on Android phones. Safari doesn't
+support the webcam API on desktop or phone, so it will not work.
+    </p>
 </div>
 </body>
 </html>

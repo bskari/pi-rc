@@ -54,14 +54,19 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
             except Exception as exc:
                 print('{}, sending 500'.format(exc))
                 self.send_response(500)
+                self.send_header('Content-type', 'text/plain; charset=utf-8')
                 self.end_headers()
+                # Firefox keeps expecting to get XML back. If we send back
+                # plain text, it doesn't error out, but it generates a console
+                # warning, so let's just play nice
+                self.wfile.write('<p>Unable to contact pi_pcm; is it running?</p>')
                 return
 
             self.send_response(response_status_code)
             self.end_headers()
             return
 
-        self.send_response(404, 'Not found')
+        self.send_response(404)
         self.end_headers()
 
 
