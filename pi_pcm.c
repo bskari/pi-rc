@@ -187,6 +187,7 @@ struct dma_cb_t {
     uint32_t info, src, dst, length,
              stride, next, pad[2];
 };
+static struct dma_cb_t* cbp = NULL;
 
 #define BUS_TO_PHYS(x) ((x)&~0xC0000000)
 
@@ -254,7 +255,7 @@ static int fill_buffer(
     const volatile uint32_t* dma_reg_
 );
 static int frequency_to_control(float frequency);
-static void write_samples(struct dma_cb_t* cbp, const float frequency);
+static void write_samples(float frequency);
 static void initialize_dma(void);
 static void initialize_mbox(void);
 static int parse_json(
@@ -299,7 +300,10 @@ int main(int argc, char** argv) {
     /* The fractional part is stored in the lower 12 bits */
     float frequency = 49.830;
 
-#ifndef TEST_COMPILATION
+#ifdef TEST_COMPILATION
+    struct control_data_s test_struct;
+    ctl = &test_struct;
+#else
     dma_reg = map_peripheral(DMA_VIRT_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_VIRT_BASE, PWM_LEN);
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
@@ -315,20 +319,12 @@ int main(int argc, char** argv) {
 
     initialize_mbox();
     ctl = (struct control_data_s*)mbox.virt_addr;
-#else
-    struct control_data_s test_struct;
-    ctl = &test_struct;
-#endif
+    cbp = ctl->cb;
 
-    struct dma_cb_t* cbp = ctl->cb;
-
-#ifndef TEST_COMPILATION
-    write_samples(cbp, frequency);
-#endif
+    write_samples(frequency);
 
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
-#ifndef TEST_COMPILATION
     initialize_dma();
 #endif
 
@@ -363,6 +359,16 @@ int main(int argc, char** argv) {
             fatal("Unable to set socket options\n");
         }
     }
+
+    if (fcntl(socket_handle, F_SETFL, O_NONBLOCK) < 0) {
+        fatal("Unable to set socket options\n");
+    }
+    if (options.tcp) {
+        if (fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK) < 0) {
+            fatal("Unable to set socket options\n");
+        }
+    }
+
     struct sockaddr_in server_address;
     struct sockaddr_in client_address;
     socklen_t client_length = sizeof(client_address);
@@ -386,7 +392,7 @@ int main(int argc, char** argv) {
         printf("Listening for commands on TCP port %d\n", options.port);
         tcp_socket_connection = accept(socket_handle, NULL, NULL);
         if (tcp_socket_connection < 0) {
-            fatal("Unable to accept TCP connection\n");
+            fatal("Unable to accept TCP connection: %s\n", strerror(errno));
         }
     }
 
@@ -427,8 +433,7 @@ int main(int argc, char** argv) {
                         fatal("Unable to accept TCP connection: %s\n", strerror(errno));
                     }
                 } else {
-                    const int fcntl_status = fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK);
-                    if (fcntl_status < 0) {
+                    if (fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK) < 0) {
                         fatal("Unable to set socket options\n");
                     }
                     continue;
@@ -522,10 +527,10 @@ int main(int argc, char** argv) {
             }
         }
 
-#ifndef TEST_COMPILATION
-        const int used = fill_buffer(command, new_command, ctl, dma_reg);
-#else
+#ifdef TEST_COMPILATION
         const int used = 1;
+#else
+        const int used = fill_buffer(command, new_command, ctl, dma_reg);
 #endif
         if (used > 0) {
             if (new_command != NULL) {
@@ -544,7 +549,7 @@ int main(int argc, char** argv) {
 }
 
 
-static void write_samples(struct dma_cb_t* cbp, const float frequency) {
+static void write_samples(const float frequency) {
     int i;
     const int frequency_control = frequency_to_control(frequency);
     uint32_t phys_sample_dst = CM_GP0DIV;
@@ -569,6 +574,7 @@ static void write_samples(struct dma_cb_t* cbp, const float frequency) {
         cbp->next = mem_virt_to_phys(cbp + 1);
         cbp++;
     }
+    cbp--;
 }
 
 
@@ -603,7 +609,7 @@ static void initialize_dma(void) {
     dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
     dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
 }
-
+ 
 
 static void initialize_mbox(void) {
     mbox.handle = mbox_open();
@@ -657,17 +663,17 @@ static void fatal(char* fmt, ...) {
 }
 
 
-uint32_t mem_virt_to_phys(void* virt) {
+static uint32_t mem_virt_to_phys(void* virt) {
     uint32_t offset = (uint8_t*)virt - mbox.virt_addr;
     return mbox.bus_addr + offset;
 }
 
 
-uint32_t mem_phys_to_virt(uint32_t phys) {
+static uint32_t mem_phys_to_virt(uint32_t phys) {
   return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
 }
 
-void* map_peripheral(uint32_t base, uint32_t len) {
+static void* map_peripheral(uint32_t base, uint32_t len) {
     int fd = open("/dev/mem", O_RDWR);
     void* vaddr;
 
@@ -894,7 +900,7 @@ CLEANUP:
 }
 
 
-void free_command(struct command_node_t* command) {
+static void free_command(struct command_node_t* command) {
     while (command) {
         struct command_node_t* const previous = command;
         command = command->next;
@@ -903,7 +909,7 @@ void free_command(struct command_node_t* command) {
 }
 
 
-struct pi_options get_args(const int argc, char* argv[]) {
+static struct pi_options get_args(const int argc, char* argv[]) {
     const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
         {"verbose", no_argument, NULL, 'v'},
@@ -952,14 +958,14 @@ struct pi_options get_args(const int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
     if (!options.tcp && !options.udp) {
-        /* Default to TCP */
-        options.tcp = 1;
+        /* Default to UDP */
+        options.udp = 1;
     }
     return options;
 }
 
 
-void print_usage(const char* program) {
+static void print_usage(const char* program) {
     printf("Usage: %s [OPTIONS]\n", program);
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
@@ -969,7 +975,7 @@ void print_usage(const char* program) {
 }
 
 
-const char* post_response(const int status) {
+static const char* post_response(const int status) {
     if (status == 0) {
         return
 "HTTP/1.0 204 NO CONTENT\r\n\
@@ -981,12 +987,12 @@ Content-Type: text/plain\r\n";
 }
 
 
-int hexit_to_value(char hexit) {
+static int hexit_to_value(char hexit) {
     return (hexit > '9') ? (hexit &~ 0x20) - 'A' + 10 : (hexit - '0');
 }
 
 
-int decode_post_request(char* raw_post_data, char* json_out) {
+static int decode_post_request(char* raw_post_data, char* json_out) {
     // Find two CRLFs in a row to get data
     char* message = strstr(raw_post_data, "\r\n\r\n");
     if (!message) {
