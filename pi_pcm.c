@@ -231,13 +231,11 @@ struct control_data_s {
 #define NUM_PAGES   (int)((sizeof(struct control_data_s) + PAGE_SIZE - 1) >> PAGE_SHIFT)
 
 static struct control_data_s* ctl;
-static int socket_handle = 0;
-static int tcp_socket_connection = 0;
+static int udp_fd = 0;
+static int tcp_fd = 0;
 
 struct pi_options {
     int verbose;
-    int udp;
-    int tcp;
     int port;
 };
 static struct pi_options get_args(int argc, char* argv[]);
@@ -264,6 +262,9 @@ static int parse_json(
     int* request_response
 );
 static void free_command(struct command_node_t* command);
+static int read_from_fd(int fd,
+        int verbose,
+        struct command_node_t** command);
 static const char* post_response(const int status);
 static int hexit_to_value(char hexit);
 static int decode_post_request(char* raw_post_data, char* json_out);
@@ -338,192 +339,91 @@ int main(int argc, char** argv) {
 
     struct command_node_t* new_command = NULL;
 
-    if (options.udp) {
-        socket_handle = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    } else {
-        socket_handle = socket(AF_INET, SOCK_STREAM, 0);
+    // Socket stuff
+    struct sockaddr_in serveraddr;
+    memset(&serveraddr, 0, sizeof(serveraddr));
+    serveraddr.sin_family = AF_INET;
+    serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    serveraddr.sin_port = htons(options.port);
+
+    // Set up UDP socket
+    if ((udp_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+        fatal("Unable to create UDP socket: %s\n", strerror(errno));
     }
-    if (socket_handle < 0) {
-        fatal("Unable to create socket\n");
+    if (bind(udp_fd, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) < 0) {
+        fatal("UDP bind failed: %s\n", strerror(errno));
+        close(udp_fd);
+        exit(1);
     }
 
-    if (options.tcp) {
-        int optionValue = 1;
-        const int status = setsockopt(
-                socket_handle,
-                SOL_SOCKET,
-                SO_REUSEADDR,
-                (const void *)&optionValue,
-                sizeof(int));
-        if (status) {
-            fatal("Unable to set socket options\n");
-        }
+    // Set up TCP socket
+    if ((tcp_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        fatal("Unable to create socket: %s\n", strerror(errno));
+    }
+    int optionValue = 1;
+    if (setsockopt(
+            tcp_fd,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            (const void *)&optionValue,
+            sizeof(optionValue)) != 0) {
+        fatal("Unable to set socket options: %s\n", strerror(errno));
+    }
+    if (bind(tcp_fd, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) < 0) {
+        fatal("TCP bind failed: %s\n", strerror(errno));
+        close(udp_fd);
+        close(tcp_fd);
+        exit(1);
+    }
+    if (listen(tcp_fd, 1) < 0) {
+        fatal("Unable to listen on TCP: %s\n", strerror(errno));
     }
 
-    if (fcntl(socket_handle, F_SETFL, O_NONBLOCK) < 0) {
-        fatal("Unable to set socket options\n");
-    }
-    if (options.tcp) {
-        if (fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK) < 0) {
-            fatal("Unable to set socket options\n");
-        }
-    }
+    // Set up select
+    fd_set read_fds, master;
+    FD_ZERO(&master);
+    FD_SET(tcp_fd, &master);
+    FD_SET(udp_fd, &master);
 
-    struct sockaddr_in server_address;
-    struct sockaddr_in client_address;
-    socklen_t client_length = sizeof(client_address);
-    bzero(&client_address, sizeof(client_address));
-    server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_address.sin_port = htons(options.port);
-    const int bind_status = bind(
-        socket_handle,
-        (struct sockaddr*)&server_address,
-        sizeof(server_address));
-    if (bind_status < 0) {
-        fatal("Unable to bind socket\n");
-    }
-
-    if (options.tcp) {
-        const int listen_status = listen(socket_handle, 1);
-        if (listen_status < 0) {
-            fatal("Unable to listen\n");
-        }
-        printf("Listening for commands on TCP port %d\n", options.port);
-        tcp_socket_connection = accept(socket_handle, NULL, NULL);
-        if (tcp_socket_connection < 0) {
-            fatal("Unable to accept TCP connection: %s\n", strerror(errno));
-        }
-    }
-
-    char message_buffer[BUFFER_SIZE];
-    char post_data[BUFFER_SIZE];
+    int max_fd = tcp_fd > udp_fd
+      ? tcp_fd
+      : udp_fd;
 
     while (1) {
-        /* This is nonblocking because we set it as such as above */
-        int bytes_count;
-        if (options.udp) {
-            bytes_count = recvfrom(
-                socket_handle,
-                message_buffer,
-                sizeof(message_buffer) / sizeof(message_buffer[0]),
-                0,
-                (struct sockaddr*)&client_address,
-                &client_length);
-        } else {
-            if (tcp_socket_connection != 0) {
-                bytes_count = recv(
-                    tcp_socket_connection,
-                    message_buffer,
-                    sizeof(message_buffer) / sizeof(message_buffer[0]),
-                    0);
-                if (bytes_count == 0) {
-                    /* Socket closed, wait for another connection */
-                    tcp_socket_connection = 0;
-                }
-            } else {
-                /* Look for another connection */
-                tcp_socket_connection = accept(socket_handle, NULL, NULL);
-                if (tcp_socket_connection < 0) {
-                    fprintf(stderr, "Unable to accept TCP connection: %s\n", strerror(errno));
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        /* No connection ready, just keep running */
-                        tcp_socket_connection = 0;
-                    } else {
-                        fatal("Unable to accept TCP connection: %s\n", strerror(errno));
-                    }
-                } else {
-                    if (fcntl(tcp_socket_connection, F_SETFL, O_NONBLOCK) < 0) {
-                        fatal("Unable to set socket options\n");
-                    }
-                    continue;
-                }
-            }
+        read_fds = master;
+        const int nfds_waiting = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+        if (nfds_waiting < 0) {
+            fatal("Select failed: %s\n", strerror(errno));
         }
-        /**
-         * If the received message is too long, then it will be truncated.
-         * All valid messages should always fit in the buffer, so just ignore it
-         * if it's too long.
-         */
-        if (
-            bytes_count > 0
-            && (size_t)bytes_count < sizeof(message_buffer) / sizeof(message_buffer[0])
-        ) {
-            message_buffer[bytes_count] = '\0';
-            struct command_node_t* parsed_command = NULL;
-            int request_response = 0;
-            char* json_data = NULL;
-            if (strncmp("POST ", message_buffer, 5) == 0) {
-                const int status = decode_post_request(message_buffer, post_data);
-                json_data = post_data;
-                const char* const response = post_response(status);
-                send(tcp_socket_connection, response, strlen(response), 0);
-                close(tcp_socket_connection);
-                tcp_socket_connection = 0;
-                if (status) {
-                    printf("Bad POST request\n");
-                    continue;
-                }
-            } else {
-                json_data = message_buffer;
-            }
+        if (nfds_waiting == 0) {
+            // Select timed out
+            continue;
+        }
 
-            if (options.verbose) {
-                printf("Received message \"%s\"\n", json_data);
-            }
-            const int parse_status = parse_json(
-                json_data,
-                &parsed_command,
-                &request_response);
-            if (request_response && options.udp) {
-                const int length = snprintf(
-                    message_buffer,
-                    sizeof(message_buffer) / sizeof(message_buffer[0]),
-                    "{\"time\": %d}",
-                    (int)time(NULL));
-                /**
-                 * The client should be listening for responses on the port one
-                 * above the port that it sent to us
-                 */
-                client_address.sin_port = htons(ntohs(server_address.sin_port) + 1);
-                sendto(
-                    socket_handle,
-                    message_buffer,
-                    length,
-                    0,
-                    (struct sockaddr*)&client_address,
-                    client_length);
-            }
-
-            if (parse_status == 0) {
-                /**
-                 * Command bursts come after synchronization bursts, and
-                 * they're the interesting part, so print those
-                 */
-                const struct command_node_t* const print_command = (
-                    parsed_command->next == NULL
-                    ? parsed_command
-                    : parsed_command->next);
-                if (options.verbose) {
-                    printf(
-                        "Sending command %d %d:%d bursts @ %4.3f (%4.3f)\n",
-                        print_command->repeats,
-                        (int)print_command->burst_us,
-                        (int)print_command->spacing_us,
-                        print_command->frequency,
-                        print_command->dead_frequency);
-                }
-
-                if (new_command == NULL) {
-                    new_command = parsed_command;
+        for (int fd = 0; fd < max_fd + 1; ++fd) {
+            if (FD_ISSET(fd, &read_fds)) {
+                if (fd == tcp_fd) {
+                    // New connection
+                    int new_fd;
+                    if ((new_fd = accept(tcp_fd, NULL, NULL)) < 0) {
+                        fatal(
+                            "Unable to accept TCP connection: %s\n",
+                            strerror(errno));
+                    }
+                    FD_SET(new_fd, &master);
+                    if (new_fd > max_fd) {
+                        max_fd = new_fd;
+                    }
                 } else {
-                    free_command(command);
-                    command = new_command;
-                    new_command = parsed_command;
+                    // Read message
+                    if (read_from_fd(fd, options.verbose, &command) <= 0) {
+                        close(fd);
+                        FD_CLR(fd, &master);
+                        while (!FD_ISSET(max_fd, &master)) {
+                            --max_fd;
+                        }
+                    }
                 }
-            } else {
-                /* The error message will be printed in the JSON parser */
-                free_command(parsed_command);
             }
         }
 
@@ -609,7 +509,7 @@ static void initialize_dma(void) {
     dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
     dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
 }
- 
+
 
 static void initialize_mbox(void) {
     mbox.handle = mbox_open();
@@ -644,11 +544,11 @@ static void terminate(const int signal_) {
         dma_reg[DMA_CS] = BCM2708_DMA_ABORT | BCM2708_DMA_ACTIVE;
         udelay(500);
     }
-    if (tcp_socket_connection != 0) {
-        close(tcp_socket_connection);
+    if (tcp_fd != 0) {
+        close(tcp_fd);
     }
-    if (socket_handle != 0) {
-        close(socket_handle);
+    if (tcp_fd != 0) {
+        close(tcp_fd);
     }
     exit(1);
 }
@@ -670,7 +570,7 @@ static uint32_t mem_virt_to_phys(void* virt) {
 
 
 static uint32_t mem_phys_to_virt(uint32_t phys) {
-  return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
+    return phys - (uint32_t)mbox.bus_addr + (uint32_t)mbox.virt_addr;
 }
 
 static void* map_peripheral(uint32_t base, uint32_t len) {
@@ -809,6 +709,10 @@ static int parse_json(
 
     size_t array_index;
     const size_t array_size = json_array_size(root);
+    if (array_size == 0) {
+        fprintf(stderr, "Array was empty\n");
+        goto CLEANUP;
+    }
     for (array_index = 0; array_index < array_size; ++array_index) {
         object = json_array_get(root, array_index);
         if (!json_is_object(object)) {
@@ -909,6 +813,96 @@ static void free_command(struct command_node_t* command) {
 }
 
 
+static int read_from_fd(
+        const int fd,
+        const int verbose,
+        struct command_node_t** command
+) {
+    static char message_buffer[BUFFER_SIZE];
+    static char post_data[BUFFER_SIZE];
+
+    const int bytes_count = read(fd, message_buffer, BUFFER_SIZE);
+    if (bytes_count < 0) {
+        fatal("Error reading from file descriptor: %s\n", strerror(errno));
+    } else if (bytes_count == 0) {
+        // End of file, I guess?
+        return -1;
+    }
+
+    struct command_node_t* new_command = NULL;
+
+    /**
+     * If the received message is too long, then it will be truncated.
+     * All valid messages should always fit in the buffer, so just ignore it
+     * if it's too long.
+     */
+    if (
+        bytes_count > 0
+        && (size_t)bytes_count < sizeof(message_buffer) / sizeof(message_buffer[0])
+    ) {
+        message_buffer[bytes_count] = '\0';
+        struct command_node_t* parsed_command = NULL;
+        int request_response = 0;
+        char* json_data = NULL;
+        if (strncmp("POST ", message_buffer, 5) == 0) {
+            const int status = decode_post_request(message_buffer, post_data);
+            json_data = post_data;
+            const char* const response = post_response(status);
+            send(tcp_fd, response, strlen(response), 0);
+            close(tcp_fd);
+            tcp_fd = 0;
+            if (status) {
+                printf("Bad POST request\n");
+                return bytes_count;
+            }
+        } else {
+            json_data = message_buffer;
+        }
+
+        if (verbose) {
+            printf("Received message \"%s\"\n", json_data);
+        }
+        // TODO: Remove request response, nobody cares
+        const int parse_status = parse_json(
+            json_data,
+            &parsed_command,
+            &request_response);
+
+        if (parse_status == 0) {
+            /**
+             * Command bursts come after synchronization bursts, and
+             * they're the interesting part, so print those
+             */
+            if (verbose) {
+                const struct command_node_t* const print_command = (
+                    parsed_command->next == NULL
+                    ? parsed_command
+                    : parsed_command->next);
+                printf(
+                    "Sending command %d %d:%d bursts @ %4.3f (%4.3f)\n",
+                    print_command->repeats,
+                    (int)print_command->burst_us,
+                    (int)print_command->spacing_us,
+                    print_command->frequency,
+                    print_command->dead_frequency);
+            }
+
+            if (new_command == NULL) {
+                new_command = parsed_command;
+            } else {
+                free_command(*command);
+                *command = new_command;
+                new_command = parsed_command;
+            }
+        } else {
+            /* The error message will be printed in the JSON parser */
+            free_command(parsed_command);
+        }
+    }
+    return bytes_count;
+}
+
+
 static struct pi_options get_args(const int argc, char* argv[]) {
     const struct option long_options[] = {
         {"help", no_argument, NULL, 'h'},
@@ -921,8 +915,6 @@ static struct pi_options get_args(const int argc, char* argv[]) {
     struct pi_options options;
     options.port = 12345;
     options.verbose = 0;
-    options.udp = 0;
-    options.tcp = 0;
     int opt;
     int long_index = 0;
     while (1) {
@@ -941,25 +933,11 @@ static struct pi_options get_args(const int argc, char* argv[]) {
             case 'p':
                 options.port = atoi(optarg);
                 break;
-            case 't':
-                options.tcp = 1;
-                break;
-            case 'u':
-                options.udp = 1;
-                break;
             default:
                 fprintf(stderr, "Unknown option\n");
                 print_usage(argv[0]);
                 exit(EXIT_FAILURE);
         }
-    }
-    if (options.tcp && options.udp) {
-        fprintf(stderr, "Only one of --tcp and --udp may be specified\n");
-        exit(EXIT_FAILURE);
-    }
-    if (!options.tcp && !options.udp) {
-        /* Default to UDP */
-        options.udp = 1;
     }
     return options;
 }
@@ -970,8 +948,6 @@ static void print_usage(const char* program) {
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
     printf("-v, --verbose  Print more debugging information.\n");
-    printf("-t, --tcp      Listen for messages on a TCP connection.\n");
-    printf("-u, --udp      Listen for messages on a UDP connection.\n");
 }
 
 
