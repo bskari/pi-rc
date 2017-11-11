@@ -101,6 +101,14 @@
  * CB is pointed.
  */
 
+// Make Syntastic happy
+#ifndef RASPI
+#   ifdef __x86_64__
+#       pragma GCC diagnostic ignored "-Wpointer-to-int-cast"
+#       define TEST_COMPILATION 1
+#   endif
+#endif
+
 #if (RASPI)==1
 #define PERIPH_VIRT_BASE 0x20000000
 #define PERIPH_PHYS_BASE 0x7e000000
@@ -216,10 +224,12 @@ static struct {
     uint8_t *virt_addr;    /* From mapmem() */
 } mbox;
 
+#ifndef TEST_COMPILATION
 static volatile uint32_t* pwm_reg;
 static volatile uint32_t* clk_reg;
 static volatile uint32_t* dma_reg;
 static volatile uint32_t* gpio_reg;
+#endif
 
 struct control_data_s {
     struct dma_cb_t cb[NUM_CBS];
@@ -254,8 +264,11 @@ static int fill_buffer(
 );
 static int frequency_to_control(float frequency);
 static void write_samples(float frequency);
+static void set_up_signal_handlers(void);
+static void set_up_sockets(int port);
 static void initialize_dma(void);
 static void initialize_mbox(void);
+static void serve_forever(int verbose);
 static int parse_json(
     const char* json,
     struct command_node_t** new_command,
@@ -274,15 +287,51 @@ int main(int argc, char** argv) {
 #ifdef TEST_COMPILATION
     printf("Testing on non-Pi hardware, no radio signal will be generated\n");
 #endif
+    set_up_signal_handlers();
     struct pi_options options = get_args(argc, argv);
-    int i;
+    set_up_sockets(options.port);
+    initialize_dma();
+    serve_forever(options.verbose);
+    __builtin_unreachable();
+}
 
+
+static void write_samples(const float frequency) {
+    int i;
+    const int frequency_control = frequency_to_control(frequency);
+    uint32_t phys_sample_dst = CM_GP0DIV;
+    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
+
+    for (i = 0; i < NUM_SAMPLES; i++) {
+        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
+        /* Write a frequency sample */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
+        cbp->src = mem_virt_to_phys(ctl->sample + i);
+        cbp->dst = phys_sample_dst;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+        /* Delay */
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
+        cbp->src = mem_virt_to_phys(mbox.virt_addr);
+        cbp->dst = phys_pwm_fifo_addr;
+        cbp->length = 4;
+        cbp->stride = 0;
+        cbp->next = mem_virt_to_phys(cbp + 1);
+        cbp++;
+    }
+    cbp--;
+}
+
+
+static void set_up_signal_handlers(void) {
     struct sigaction sa;
     /**
      * Catch all signals possible - it is vital we kill the DMA engine
      * on process exit!
      */
-    for (i = 1; i < 64; i++) {
+    for (int i = 1; i < 64; i++) {
         /* These are uncatchable or harmless */
         if (
             i != SIGKILL
@@ -296,11 +345,10 @@ int main(int argc, char** argv) {
             sigaction(i, &sa, NULL);
         }
     }
+}
 
-    /* Calculate the frequency control word */
-    /* The fractional part is stored in the lower 12 bits */
-    float frequency = 49.830;
 
+static void initialize_dma(void) {
 #ifdef TEST_COMPILATION
     struct control_data_s test_struct;
     ctl = &test_struct;
@@ -326,25 +374,46 @@ int main(int argc, char** argv) {
 
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
-    initialize_dma();
+    /**
+     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
+     * which is 5us, the rate at which we want to update the GPCLK control
+     * register.
+     */
+    pwm_reg[PWM_CTL] = 0;
+    udelay(10);
+    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
+    udelay(100);
+    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
+    udelay(100);
+    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
+    udelay(100);
+    pwm_reg[PWM_RNG1] = 500;
+    udelay(10);
+    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
+    udelay(10);
+    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
+    udelay(10);
+
+    /* Initialise the DMA */
+    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
+    udelay(10);
+    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
+    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
+    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
+    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
 #endif
+}
 
-    struct command_node_t* command = malloc(sizeof(*command));
-    command->burst_us = 100.0f;
-    command->spacing_us = 100.0f;
-    command->repeats = 1;
-    command->frequency = frequency;
-    command->dead_frequency = frequency;
-    command->next = NULL;
 
-    struct command_node_t* new_command = NULL;
-
+static void set_up_sockets(const int port) {
     // Socket stuff
     struct sockaddr_in serveraddr;
     memset(&serveraddr, 0, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serveraddr.sin_port = htons(options.port);
+    serveraddr.sin_port = htons(port);
 
     // Set up UDP socket
     if ((udp_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
@@ -378,6 +447,41 @@ int main(int argc, char** argv) {
     if (listen(tcp_fd, 1) < 0) {
         fatal("Unable to listen on TCP: %s\n", strerror(errno));
     }
+}
+
+
+static void initialize_mbox(void) {
+    mbox.handle = mbox_open();
+    if (mbox.handle < 0) {
+        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
+    }
+    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
+        fatal("Could not allocate memory.\n");
+    }
+    // TODO: How do we know that succeeded?
+    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
+        fatal("Could not lock memory.\n");
+    }
+    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
+        fatal("Could not map memory.\n");
+    }
+}
+
+
+__attribute__((noreturn)) static void serve_forever(const int verbose) {
+    struct command_node_t* new_command = NULL;
+
+    /* Calculate the frequency control word */
+    /* The fractional part is stored in the lower 12 bits */
+    const float frequency = 49.830;
+
+    struct command_node_t* command = malloc(sizeof(*command));
+    command->burst_us = 100.0f;
+    command->spacing_us = 100.0f;
+    command->repeats = 1;
+    command->frequency = frequency;
+    command->dead_frequency = frequency;
+    command->next = NULL;
 
     // Set up select
     fd_set read_fds, master;
@@ -416,7 +520,7 @@ int main(int argc, char** argv) {
                     }
                 } else {
                     // Read message
-                    if (read_from_fd(fd, options.verbose, &command) <= 0) {
+                    if (read_from_fd(fd, verbose, &command) <= 0) {
                         close(fd);
                         FD_CLR(fd, &master);
                         while (!FD_ISSET(max_fd, &master)) {
@@ -442,90 +546,6 @@ int main(int argc, char** argv) {
 
         usleep(10000);
     }
-
-    terminate(0);
-
-    return 0;
-}
-
-
-static void write_samples(const float frequency) {
-    int i;
-    const int frequency_control = frequency_to_control(frequency);
-    uint32_t phys_sample_dst = CM_GP0DIV;
-    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;
-
-    for (i = 0; i < NUM_SAMPLES; i++) {
-        ctl->sample[i] = 0x5a << 24 | frequency_control; /* Silence */
-        /* Write a frequency sample */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
-        cbp->src = mem_virt_to_phys(ctl->sample + i);
-        cbp->dst = phys_sample_dst;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-        /* Delay */
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
-        cbp->src = mem_virt_to_phys(mbox.virt_addr);
-        cbp->dst = phys_pwm_fifo_addr;
-        cbp->length = 4;
-        cbp->stride = 0;
-        cbp->next = mem_virt_to_phys(cbp + 1);
-        cbp++;
-    }
-    cbp--;
-}
-
-
-static void initialize_dma(void) {
-    /**
-     * Initialise PWM to use a 100MHz clock too, and set the range to 500 bits,
-     * which is 5us, the rate at which we want to update the GPCLK control
-     * register.
-     */
-    pwm_reg[PWM_CTL] = 0;
-    udelay(10);
-    clk_reg[PWMCLK_CNTL] = 0x5A000006;              /* Source=PLLD and disable */
-    udelay(100);
-    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5 << 12);  /* set pwm div to 5, for 100MHz */
-    udelay(100);
-    clk_reg[PWMCLK_CNTL] = 0x5A000016;              /* Source=PLLD and enable */
-    udelay(100);
-    pwm_reg[PWM_RNG1] = 500;
-    udelay(10);
-    pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_CLRF;
-    udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;
-    udelay(10);
-
-    /* Initialise the DMA */
-    dma_reg[DMA_CS] = BCM2708_DMA_RESET;
-    udelay(10);
-    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;
-    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);
-    dma_reg[DMA_DEBUG] = 7; /* clear debug error flags */
-    dma_reg[DMA_CS] = 0x10880001;   /* go, mid priority, wait for outstanding writes */
-}
-
-
-static void initialize_mbox(void) {
-    mbox.handle = mbox_open();
-    if (mbox.handle < 0) {
-        fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
-    }
-    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
-        fatal("Could not allocate memory.\n");
-    }
-    // TODO: How do we know that succeeded?
-    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
-        fatal("Could not lock memory.\n");
-    }
-    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
-        fatal("Could not map memory.\n");
-    }
 }
 
 
@@ -537,6 +557,7 @@ static void udelay(int us) {
 
 static void terminate(const int signal_) {
     printf("Terminating with signal %d\n", signal_);
+#ifndef TEST_COMPILATION
     if (dma_reg) {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
         udelay(500);
@@ -544,11 +565,12 @@ static void terminate(const int signal_) {
         dma_reg[DMA_CS] = BCM2708_DMA_ABORT | BCM2708_DMA_ACTIVE;
         udelay(500);
     }
+#endif
     if (tcp_fd != 0) {
         close(tcp_fd);
     }
-    if (tcp_fd != 0) {
-        close(tcp_fd);
+    if (udp_fd != 0) {
+        close(udp_fd);
     }
     exit(1);
 }
