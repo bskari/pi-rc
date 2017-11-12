@@ -281,9 +281,6 @@ static void free_command(struct command_node_t* command);
 static int read_from_fd(int fd,
         int verbose,
         struct command_node_t** command);
-static const char* post_response(const int status);
-static int hexit_to_value(char hexit);
-static int decode_post_request(char* raw_post_data, char* json_out);
 
 
 int main(int argc, char** argv) {
@@ -845,7 +842,6 @@ static int read_from_fd(
         struct command_node_t** command
 ) {
     static char message_buffer[BUFFER_SIZE];
-    static char post_data[BUFFER_SIZE];
 
     const int bytes_count = read(fd, message_buffer, BUFFER_SIZE);
     if (bytes_count < 0) {
@@ -869,21 +865,7 @@ static int read_from_fd(
         message_buffer[bytes_count] = '\0';
         struct command_node_t* parsed_command = NULL;
         int request_response = 0;
-        char* json_data = NULL;
-        if (strncmp("POST ", message_buffer, 5) == 0) {
-            const int status = decode_post_request(message_buffer, post_data);
-            json_data = post_data;
-            const char* const response = post_response(status);
-            send(tcp_fd, response, strlen(response), 0);
-            close(tcp_fd);
-            tcp_fd = 0;
-            if (status) {
-                printf("Bad POST request\n");
-                return bytes_count;
-            }
-        } else {
-            json_data = message_buffer;
-        }
+        char* json_data = message_buffer;
 
         if (verbose) {
             printf("Received message \"%s\"\n", json_data);
@@ -974,69 +956,4 @@ static void print_usage(const char* program) {
     printf("-p, --port     The port to listen for messags on.\n");
     printf("-h, --help     Print this help message.\n");
     printf("-v, --verbose  Print more debugging information.\n");
-}
-
-
-static const char* post_response(const int status) {
-    if (status == 0) {
-        return
-"HTTP/1.0 204 NO CONTENT\r\n\
-Content-Type: text/plain\r\n";
-    }
-    return
-"HTTP/1.0 422 Unprocessable\r\n\
-Content-Type: text/plain\r\n";
-}
-
-
-static int hexit_to_value(char hexit) {
-    return (hexit > '9') ? (hexit &~ 0x20) - 'A' + 10 : (hexit - '0');
-}
-
-
-static int decode_post_request(char* raw_post_data, char* json_out) {
-    // Find two CRLFs in a row to get data
-    char* message = strstr(raw_post_data, "\r\n\r\n");
-    if (!message) {
-        // Invalid POST
-        return 1;
-    }
-    message += 4;
-
-    // Find the parameter
-    while (*message != '=') {
-        ++message;
-    }
-    ++message;
-    // There shouldn't be any other parameters, but just in case, scan to the
-    // end. We also need to decode percent-encoding.
-    while (*message != '\0') {
-        if (*message == '=') {
-            return 2;
-        }
-        if (*message == '%') {
-            ++message;
-            if (*message == '\0') {
-                return 2;
-            }
-            const int firstHexValue = hexit_to_value(*message);
-
-            ++message;
-            if (*message == '\0') {
-                return 2;
-            }
-            const int secondHexValue = hexit_to_value(*message);
-
-            *json_out = (char)(firstHexValue * 16 + secondHexValue);
-            ++json_out;
-            ++message;
-
-        } else { // Not '%'
-            *json_out = *message;
-            ++json_out;
-            ++message;
-        }
-    }
-    *json_out = '\0';
-    return 0;
 }

@@ -468,7 +468,7 @@ header {
                             loop();
                         } else {
                             toggleMonitoring();
-                            saveConfigToWebStorage();
+                            saveConfig();
                             var infoP = document.getElementById('info');
                             while (infoP.childNodes.length > 0) {
                                 infoP.removeChild(infoP.childNodes[0]);
@@ -516,7 +516,7 @@ header {
         return sumDifference / (pixelCount * 256 * 3) * 100;
     }
 
-    function saveConfigToWebStorage() {
+    function saveConfig() {
         var frequency = parseFloat(document.getElementById('frequency').value);
         var useconds = parseInt(document.getElementById('useconds').value);
         var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
@@ -530,7 +530,14 @@ header {
             'signal_burst_us': useconds,
             'signal_spacing_us': useconds,
         });
-        window.localStorage.setItem('piRcConfig', config);
+
+        var request = new XMLHttpRequest();
+        request.onerror = function() {
+            alert('Unable to contact the Python server: is host_files.py running?');
+        };
+        request.open('POST', window.location.origin + '/save/');
+        request.setRequestHeader('Content-Type', 'application/json');
+        request.send(JSON.stringify(config));
     }
 
     window.addEventListener('load', startUp, false);
