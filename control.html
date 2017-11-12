@@ -55,10 +55,11 @@ function loadFile(file) {
     };
     reader.readAsText(file);
 }
-function loadWebStorage() {
-    if (window.localStorage.getItem('piRcConfig')) {
+function loadConfigFromServer() {
+    var request = new XMLHttpRequest();
+    request.onload = function() {
         try {
-            var config = JSON.parse(window.localStorage.getItem('piRcConfig'));
+            var config = JSON.parse(this.responseText);
             loadConfig(config);
             // We might have gotten redirected here from watch.html, in which
             // case, the parameters for the directions will be empty. Pop open
@@ -70,7 +71,9 @@ function loadWebStorage() {
             alert('Unable to read JSON: ' + error);
             return;
         }
-    }
+    };
+    request.open('GET', window.location.origin + '/parameters.json');
+    request.send();
 }
 function loadConfig(config) {
     for (var option in optionToId) {
@@ -212,7 +215,7 @@ function init(){
 document.getElementById('parameters-heading').addEventListener('click', toggleOptions);
 document.getElementById('parameter-file').addEventListener('change', handleFileSelect);
 
-loadWebStorage();
+loadConfigFromServer();
 
 var element;
 ['forward-button', 'reverse-button', 'left-button', 'right-button'].forEach(function (id) {

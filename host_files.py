@@ -13,18 +13,13 @@ if sys.version_info.major < 3:
     Server = SocketServer.TCPServer
     SimpleHTTPRequestHandler = SimpleHTTPServer.SimpleHTTPRequestHandler
     urlopen = urllib.urlopen
+    decode = lambda s: s.decode('string_escape')
 else:
     from http.server import SimpleHTTPRequestHandler, HTTPServer  # pylint: disable=E0401
     Server = HTTPServer  # pylint: disable=C0103
     import urllib.request
     urlopen = urllib.request.urlopen
-
-
-def send_post(url, encoded_data):
-    response = urlopen(url, encoded_data)
-    response.read()
-    response.close()
-    return response.getcode()
+    decode = bytes(s, 'utf-8').decode('unicode-escape')
 
 
 class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R0903
@@ -37,9 +32,8 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
             self.send_response(301)
             self.send_header('Location', self.path + '/')
             self.end_headers()
-            return
 
-        if self.path == '/command/':
+        elif self.path == '/command/':
             # Forward this request on to the C server, because doing SSL in C
             # sounds hard
             content_length = int(self.headers.get('Content-Length'))
@@ -47,10 +41,9 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
             print(post_data)
 
             try:
-                response_status_code = send_post(
-                    'http://localhost:12345/',
-                    b'data=' + post_data
-                )
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.connect(('localhost', 12345))
+                sock.sendall(post_data)
             except Exception as exc:
                 print('{}, sending 500'.format(exc))
                 self.send_response(500)
@@ -61,19 +54,33 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
                 # warning, so let's just play nice
                 self.wfile.write('<p>Unable to contact pi_pcm; is it running?</p>')
                 return
+            finally:
+                sock.close()
 
-            self.send_response(response_status_code)
+            self.send_response(200)
             self.end_headers()
-            return
 
-        self.send_response(404)
-        self.end_headers()
+        elif self.path == '/save/':
+            content_length = int(self.headers.get('Content-Length'))
+            post_data = decode(self.rfile.read(content_length)[1:-1])
+            with open('parameters.json', 'w') as parameters_file:
+                parameters_file.write(post_data)
+
+            self.send_response(200)
+            self.end_headers()
+
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 
 def main():
     """Main."""
     # The URL fetching stuff inherits this timeout
     socket.setdefaulttimeout(0.25)
+    # Prevent "address already in use" errors
+    print(dir(Server))
+    Server.allow_reuse_address = True
 
     base_cert_file_name = 'www.pi-rc.com'
     try:
