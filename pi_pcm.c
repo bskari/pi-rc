@@ -191,6 +191,9 @@
 
 #define BUFFER_SIZE 20000
 
+// This frequency is used for RC cars in the US and the UK
+#define DEFAULT_FREQUENCY 27.045
+
 struct dma_cb_t {
     uint32_t info, src, dst, length,
              stride, next, pad[2];
@@ -331,7 +334,8 @@ static void set_up_signal_handlers(void) {
      * Catch all signals possible - it is vital we kill the DMA engine
      * on process exit!
      */
-    for (int i = 1; i < 64; i++) {
+    int i;
+    for (i = 1; i < 64; i++) {
         /* These are uncatchable or harmless */
         if (
             i != SIGKILL
@@ -370,7 +374,7 @@ static void initialize_dma(void) {
     ctl = (struct control_data_s*)mbox.virt_addr;
     cbp = ctl->cb;
 
-    write_samples(frequency);
+    write_samples(DEFAULT_FREQUENCY);
 
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
@@ -473,14 +477,13 @@ __attribute__((noreturn)) static void serve_forever(const int verbose) {
 
     /* Calculate the frequency control word */
     /* The fractional part is stored in the lower 12 bits */
-    const float frequency = 49.830;
 
     struct command_node_t* command = malloc(sizeof(*command));
     command->burst_us = 100.0f;
     command->spacing_us = 100.0f;
     command->repeats = 1;
-    command->frequency = frequency;
-    command->dead_frequency = frequency;
+    command->frequency = DEFAULT_FREQUENCY;
+    command->dead_frequency = DEFAULT_FREQUENCY;
     command->next = NULL;
 
     // Set up select
@@ -504,7 +507,8 @@ __attribute__((noreturn)) static void serve_forever(const int verbose) {
             continue;
         }
 
-        for (int fd = 0; fd < max_fd + 1; ++fd) {
+        int fd;
+        for (fd = 0; fd < max_fd + 1; ++fd) {
             if (FD_ISSET(fd, &read_fds)) {
                 if (fd == tcp_fd) {
                     // New connection
