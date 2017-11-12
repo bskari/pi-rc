@@ -60,10 +60,10 @@
 
 #include <arpa/inet.h>
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
-#include <jansson.h>
 #include <math.h>
 #include <memory.h>
 #include <signal.h>
@@ -251,6 +251,19 @@ struct pi_options {
     int verbose;
     int port;
 };
+
+enum json_token {
+    LSB,
+    RSB,
+    LCB,
+    RCB,
+    COMMA,
+    NUMBER,
+    COLON,
+    STRING,
+    END
+};
+
 static struct pi_options get_args(int argc, char* argv[]);
 static void print_usage(const char* program);
 static void udelay(int us);
@@ -263,8 +276,7 @@ static int fill_buffer(
     const struct command_node_t* command,
     const struct command_node_t* next_command,
     struct control_data_s* ctl_,
-    const volatile uint32_t* dma_reg_
-);
+    const volatile uint32_t* dma_reg_);
 static int frequency_to_control(float frequency);
 static void write_samples(float frequency);
 static void set_up_signal_handlers(void);
@@ -273,10 +285,13 @@ static void initialize_dma(void);
 static void initialize_mbox(void);
 static void serve_forever(int verbose);
 static int parse_json(
-    const char* json,
-    struct command_node_t** new_command,
-    int* request_response
-);
+        const char* json,
+        struct command_node_t** new_command,
+        int* request_response);
+static const char* get_json_token(
+        const char* json,
+        enum json_token* token,
+        char** id);
 static void free_command(struct command_node_t* command);
 static int read_from_fd(int fd,
         int verbose,
@@ -292,7 +307,7 @@ int main(int argc, char** argv) {
     set_up_sockets(options.port);
     initialize_dma();
     serve_forever(options.verbose);
-    __builtin_unreachable();
+    assert(!"This should not be reachable");
 }
 
 
@@ -708,122 +723,226 @@ static int frequency_to_control(const float frequency) {
 
 
 static int parse_json(
-    const char* const json,
+    const char* json,
     struct command_node_t** command,
     int* const request_response
 ) {
-    json_t* root = NULL;
-    json_t* object = NULL;
-    json_t* data = NULL;
-    json_error_t error;
-    int return_value = -1;
-
     assert(*command == NULL);
 
-    root = json_loads(json, 0, &error);
-    if (!root) {
-        fprintf(stderr, "error: on line %d: %s\n", error.line, error.text);
+    enum json_token token;
+    char* id;
+    struct command_node_t* parsed_command_ptr = NULL;
+    struct command_node_t* root_ptr = NULL;
+    float* property;
+    int set_properties_bitflag;
+
+    enum {
+        BEGIN,
+        OBJECT_OR_END_ARRAY,
+        PROPERTY_OR_END_OBJECT
+    } state;
+    state = BEGIN;
+
+    int ntokens = 0;
+    const int ntokens_limit = 1000;
+    // Failsafe
+    while (ntokens < ntokens_limit) {
+        json = get_json_token(json, &token, &id);
+        ++ntokens;
+
+        if (token == END) {
+            fprintf(stderr, "Unexpected end of JSON\n");
+            goto CLEANUP;
+        }
+
+        switch (state) {
+        case BEGIN:
+            if (token != LSB) {
+                fprintf(stderr, "Root element should be a JSON array\n");
+                goto CLEANUP;
+            }
+            state = OBJECT_OR_END_ARRAY;
+            break;
+
+        case OBJECT_OR_END_ARRAY:
+            // End array
+            if (token == RSB) {
+                if (root_ptr == NULL)  {
+                    fprintf(stderr, "Empty array\n");
+                    goto CLEANUP;
+                }
+                goto DONE;
+            } else if (token == COMMA) {
+                // For ease of implementation, we're going to allow multiple
+                // leading and trailing commas. I know it's invalid JSON, but
+                // I'm not too worried about it.
+                break;
+            } else if (token == LCB) {
+                // Object
+                if (root_ptr == NULL) {
+                    parsed_command_ptr = malloc(sizeof(struct command_node_t));
+                    root_ptr = parsed_command_ptr;
+                } else {
+                    parsed_command_ptr->next = malloc(sizeof(struct command_node_t));
+                    parsed_command_ptr = parsed_command_ptr->next;
+                }
+                parsed_command_ptr->next = NULL;
+                set_properties_bitflag = 0;
+                state = PROPERTY_OR_END_OBJECT;
+            } else {
+                fprintf(stderr, "Invalid JSON or invalid command\n");
+                goto CLEANUP;
+            }
+            break;
+
+        case PROPERTY_OR_END_OBJECT:
+            // End object
+            if (token == RCB) {
+                if (set_properties_bitflag != 0x1f) {
+                    fprintf(stderr, "Object is missing required properties\n");
+                    goto CLEANUP;
+                }
+                state = OBJECT_OR_END_ARRAY;
+                break;
+            } else if (token == COMMA) {
+                // For ease of implementation, we're going to allow multiple
+                // leading and trailing commas. I know it's invalid JSON, but
+                // I'm not too worried about it.
+                break;
+            } else if (token == STRING) {
+                // Object
+                property = NULL;
+                if (strcmp("burst_us", id) == 0) {
+                    property = &(parsed_command_ptr->burst_us);
+                    set_properties_bitflag |= 0x1;
+                }
+                else if (strcmp("spacing_us", id) == 0) {
+                    property = &(parsed_command_ptr->spacing_us);
+                    set_properties_bitflag |= 0x2;
+                }
+                else if (strcmp("frequency", id) == 0) {
+                    property = &(parsed_command_ptr->frequency);
+                    set_properties_bitflag |= 0x4;
+                }
+                else if (strcmp("dead_frequency", id) == 0) {
+                    property = &(parsed_command_ptr->dead_frequency);
+                    set_properties_bitflag |= 0x8;
+                }
+                else if (strcmp("repeats", id) == 0) {
+                    property = NULL;  // Special case, parse as int
+                    set_properties_bitflag |= 0x10;
+                }
+                else {
+                    fprintf(stderr, "Unrecognized property\n");
+                    goto CLEANUP;
+                }
+
+                json = get_json_token(json, &token, &id);
+                if (token != COLON) {
+                    fprintf(stderr, "Invalid JSON\n");
+                    goto CLEANUP;
+                }
+
+                json = get_json_token(json, &token, &id);
+                if (token != NUMBER) {
+                    fprintf(stderr, "Invalid JSON\n");
+                    goto CLEANUP;
+                }
+
+                if (property) {
+                    *property = atof(id);
+                } else {
+                    parsed_command_ptr->repeats = atoi(id);
+                }
+
+                // Stay on PROPERTY_OR_END_OBJECT
+            }
+            break;
+        default:
+            assert(!"Unexpected state");
+            return 1;
+        }
+    }
+DONE:
+    if (ntokens == ntokens_limit) {
+        assert(!"Too many tokens");
         goto CLEANUP;
     }
-    if (!json_is_array(root)) {
-        fprintf(stderr, "not a JSON array\n");
-        goto CLEANUP;
-    }
-
-    size_t array_index;
-    const size_t array_size = json_array_size(root);
-    if (array_size == 0) {
-        fprintf(stderr, "Array was empty\n");
-        goto CLEANUP;
-    }
-    for (array_index = 0; array_index < array_size; ++array_index) {
-        object = json_array_get(root, array_index);
-        if (!json_is_object(object)) {
-            fprintf(
-                stderr,
-                "Item %zu in array is not an object\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        *command = malloc(sizeof(**command));
-        (*command)->next = NULL;
-
-        data = json_object_get(object, "burst_us");
-        if (json_is_number(data)) {
-            (*command)->burst_us = json_number_value(data);
-        } else {
-            fprintf(
-                stderr,
-                "In item %zu: missing or invalid field: burst_us\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        data = json_object_get(object, "spacing_us");
-        if (json_is_number(data)) {
-            (*command)->spacing_us = json_number_value(data);
-        } else {
-            fprintf(
-                stderr,
-                "In item %zu: missing or invalid field: spacing_us\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        data = json_object_get(object, "repeats");
-        if (json_is_number(data)) {
-            (*command)->repeats = json_number_value(data);
-        } else {
-            fprintf(
-                stderr,
-                "In item %zu: missing or invalid field: repeats\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        data = json_object_get(object, "frequency");
-        if (json_is_number(data)) {
-            (*command)->frequency = json_number_value(data);
-        } else {
-            fprintf(
-                stderr,
-                "In item %zu: missing or invalid field: frequency\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        data = json_object_get(object, "dead_frequency");
-        if (json_is_number(data)) {
-            (*command)->dead_frequency = json_number_value(data);
-        } else {
-            fprintf(
-                stderr,
-                "In item %zu: missing or invalid field: dead_frequency\n",
-                array_index + 1);
-            goto CLEANUP;
-        }
-
-        data = json_object_get(object, "request_response");
-        /**
-         * request_response is optional so if it isn't a port number, ignore it
-         */
-        if (data != NULL && json_is_true(data)) {
-            *request_response = 1;
-        } else {
-            *request_response = 0;
-        }
-
-        command = &((*command)->next);
-    }
-
-    return_value = 0;
+    *command = root_ptr;
+    return 0;
 
 CLEANUP:
-    if (root != NULL) {
-        json_decref(root);
+    free_command(root_ptr);
+    return 1;
+}
+
+
+static const char* get_json_token(
+        const char* json,
+        enum json_token* token,
+        char** id
+) {
+    static char identifier[20];
+    size_t index = 0;
+    const char* iter = json;
+    while (isspace(*iter)) {
+        ++iter;
     }
-    return return_value;
+    switch (*iter) {
+    case '\0':
+        *token = END;
+        return iter;
+
+    case '{':
+        *token = LCB;
+        return iter + 1;
+    case '}':
+        *token = RCB;
+        return iter + 1;
+    case '[':
+        *token = LSB;
+        return iter + 1;
+    case ']':
+        *token = RSB;
+        return iter + 1;
+    case ':':
+        *token = COLON;
+        return iter + 1;
+    case ',':
+        *token = COMMA;
+        return iter + 1;
+
+    case '"':
+        ++iter;
+        while (*iter != '"' && *iter != '\0') {
+            identifier[index++] = *iter++;
+            if (index >= sizeof(identifier) / sizeof(identifier[0]) - 1) {
+                break;
+            }
+        }
+        *token = STRING;
+        identifier[index] = '\0';
+        *id = identifier;
+        return iter + 1;
+
+    default: break;
+    }
+    if (isdigit(*iter)) {
+        while (isdigit(*iter) || *iter == '.') {
+            identifier[index++] = *iter++;
+            if (index >= sizeof(identifier) / sizeof(identifier[0]) - 1) {
+                break;
+            }
+        }
+        *token = NUMBER;
+        identifier[index] = '\0';
+        *id = identifier;
+        return iter;
+    }
+
+    assert(!"This should not be reachable");
+    *token = END;
+    return json;
 }
 
 
@@ -850,8 +969,6 @@ static int read_from_fd(
         // End of file, I guess?
         return -1;
     }
-
-    struct command_node_t* new_command = NULL;
 
     /**
      * If the received message is too long, then it will be truncated.
@@ -895,16 +1012,8 @@ static int read_from_fd(
                     print_command->dead_frequency);
             }
 
-            if (new_command == NULL) {
-                new_command = parsed_command;
-            } else {
-                free_command(*command);
-                *command = new_command;
-                new_command = parsed_command;
-            }
-        } else {
-            /* The error message will be printed in the JSON parser */
-            free_command(parsed_command);
+            free_command(*command);
+            *command = parsed_command;
         }
     }
     return bytes_count;
