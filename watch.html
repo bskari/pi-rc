@@ -229,49 +229,39 @@ header {
         var syncRepeats = document.getElementById('sync-repeats').value | 0;
         var syncMultiplier = document.getElementById('sync-multiplier').value | 0;
         var signalRepeats = document.getElementById('signal-repeats').value | 0;
-        // We want to proceed in order of most likely to least. The 3 cars I've
-        // confirmed have had:
-        // useconds: 400 or 500
-        // syncRepeats: 4
-        // syncMultiplier: 3
-        // signalRepeats: 10-64
-
-        if (signalRepeats < 10 || signalRepeats > 50) {
-            signalRepeats = 10;
+        if (useconds < 100 || useconds > 1201) {
+            useconds = 100;
         }
-        if (useconds < 300 || useconds > 600) {
-            useconds = 300;
+        if (syncRepeats < 2 || syncRepeats > 7) {
+            syncRepeats = 2;
         }
-        if (syncRepeats < 3 || syncRepeats > 5) {
-            syncRepeats = 3;
+        if (syncMultiplier < 2 || syncMultiplier > 7) {
+            syncMultiplier = 2;
         }
-        if (syncMultiplier < 3 || syncMultiplier > 5) {
-            syncMultiplier = 3;
+        if (signalRepeats < 5 || signalRepeats > 50) {
+            signalRepeats = 5;
         }
 
         signalRepeats += 1;
         if (signalRepeats > 50) {
-            signalRepeats = 10;
+            signalRepeats = 5;
+            syncRepeats += 1;
+        }
+        if (syncRepeats > 7) {
+            syncRepeats = 2;
+            syncMultiplier += 1;
+        }
+        if (syncMultiplier > 7) {
+            syncMultiplier = 2;
             useconds += 100;
-
-            if (useconds > 600) {
-                useconds = 300;
-                syncRepeats += 1;
-
-                if (syncRepeats > 5) {
-                    syncRepeats = 3;
-                    syncMultiplier += 1;
-
-                    if (syncMultiplier > 5) {
-                        // Nothing more to do, reset everything
-                        useconds = 100;
-                        syncMultiplier = 2;
-                        syncRepeats = 2;
-                        signalRepeats = 5;
-                        toggleMonitoring();
-                    }
-                }
-            }
+        }
+        if (useconds > 1201) {
+            // Nothing more to do, reset everything
+            useconds = 100;
+            syncMultiplier = 2;
+            syncRepeats = 2;
+            signalRepeats = 5;
+            toggleMonitoring();
         }
 
         document.getElementById('useconds').value = useconds;
@@ -468,7 +458,7 @@ header {
                             loop();
                         } else {
                             toggleMonitoring();
-                            saveConfig();
+                            saveConfigToWebStorage();
                             var infoP = document.getElementById('info');
                             while (infoP.childNodes.length > 0) {
                                 infoP.removeChild(infoP.childNodes[0]);
@@ -516,7 +506,7 @@ header {
         return sumDifference / (pixelCount * 256 * 3) * 100;
     }
 
-    function saveConfig() {
+    function saveConfigToWebStorage() {
         var frequency = parseFloat(document.getElementById('frequency').value);
         var useconds = parseInt(document.getElementById('useconds').value);
         var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
@@ -530,14 +520,7 @@ header {
             'signal_burst_us': useconds,
             'signal_spacing_us': useconds,
         });
-
-        var request = new XMLHttpRequest();
-        request.onerror = function() {
-            alert('Unable to contact the Python server: is host_files.py running?');
-        };
-        request.open('POST', window.location.origin + '/save/');
-        request.setRequestHeader('Content-Type', 'application/json');
-        request.send(JSON.stringify(config));
+        window.localStorage.setItem('piRcConfig', config);
     }
 
     window.addEventListener('load', startUp, false);
@@ -579,27 +562,12 @@ header {
     </div>
     <div class="value">
         <select id="frequency">
-            <!-- US and UK -->
             <option value="26.995">26.995</option>
             <option value="27.045">27.045</option>
             <option value="27.095">27.095</option>
             <option value="27.145">27.145</option>
             <option value="27.195">27.195</option>
             <option value="27.255">27.255</option>
-            <!-- UK only, I've removed 2/3 of these because there were a lot -->
-            <option value="40.665">40.665</option>
-            <option value="40.695">40.695</option>
-            <option value="40.725">40.725</option>
-            <option value="40.755">40.755</option>
-            <option value="40.785">40.785</option>
-            <option value="40.815">40.815</option>
-            <option value="40.845">40.845</option>
-            <option value="40.875">40.875</option>
-            <option value="40.905">40.905</option>
-            <option value="40.935">40.935</option>
-            <option value="40.965">40.965</option>
-            <option value="40.995">40.995</option>
-            <!-- US only -->
             <option value="49.830">49.830</option>
             <option value="49.845">49.845</option>
             <option value="49.860">49.860</option>
@@ -611,25 +579,25 @@ header {
         <label for="useconds">Useconds</label>
     </div>
     <div class="value">
-        <input id="useconds" class="parameter" value="300" type="number" step="1">
+        <input id="useconds" class="parameter" value="100" type="number" step="1">
     </div>
     <div class="label">
         <label for="sync-repeats">Sync repeats</label>
     </div>
     <div class="value">
-        <input id="sync-repeats" class="parameter" value="3" type="number" step="1">
+        <input id="sync-repeats" class="parameter" value="2" type="number" step="1">
     </div>
     <div class="label">
         <label for="sync-multiplier">Sync multiplier</label>
     </div>
     <div class="value">
-        <input id="sync-multiplier" class="parameter" value="3" type="number" step="1">
+        <input id="sync-multiplier" class="parameter" value="2" type="number" step="1">
     </div>
     <div class="label">
         <label for="signal-repeats">Signal repeats</label>
     </div>
     <div class="value">
-        <input id="signal-repeats" class="parameter" value="10" type="number" step="1">
+        <input id="signal-repeats" class="parameter" value="5" type="number" step="1">
     </div>
     <div class="label">
         <label for="image-change">Image change %</label>
