@@ -79,7 +79,6 @@ def main():
     # The URL fetching stuff inherits this timeout
     socket.setdefaulttimeout(0.25)
     # Prevent "address already in use" errors
-    print(dir(Server))
     Server.allow_reuse_address = True
 
     base_cert_file_name = 'www.pi-rc.com'
