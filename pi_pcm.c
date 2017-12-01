@@ -366,8 +366,7 @@ static void set_up_signal_handlers(void) {
 
 static void initialize_dma(void) {
 #ifdef TEST_COMPILATION
-    struct control_data_s test_struct;
-    ctl = &test_struct;
+    ctl = malloc(sizeof(struct control_data_s));
 #else
     dma_reg = map_peripheral(DMA_VIRT_BASE, DMA_LEN);
     pwm_reg = map_peripheral(PWM_VIRT_BASE, PWM_LEN);
