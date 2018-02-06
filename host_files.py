@@ -19,7 +19,7 @@ else:
     Server = HTTPServer  # pylint: disable=C0103
     import urllib.request
     urlopen = urllib.request.urlopen
-    decode = bytes(s, 'utf-8').decode('unicode-escape')
+    decode = lambda s: bytes(s, 'utf-8').decode('unicode-escape')
 
 
 class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R0903
@@ -121,7 +121,18 @@ script will now generate a self-signed certificate.'''
         keyfile='{}.key'.format(base_cert_file_name),
         ssl_version=ssl.PROTOCOL_TLSv1
     )
-    print('Running server on https://localhost:4443/')
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        skari_org = '149.154.158.78'
+        # This won't actually make a connection
+        sock.connect((skari_org, 1))
+        ip = sock.getsockname()[0]
+    except socket.gaierror:
+        ip = 'localhost'
+    finally:
+        sock.close()
+    print('Running server on https://{}:{}/'.format(ip, port))
     httpd.serve_forever()
 
 
