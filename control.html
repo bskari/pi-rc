@@ -59,8 +59,12 @@ function loadConfigFromServer() {
     var request = new XMLHttpRequest();
     request.onload = function() {
         try {
-            var config = JSON.parse(this.responseText);
-            loadConfig(config);
+            if (this.status === 200) {
+                var config = JSON.parse(this.responseText);
+                loadConfig(config);
+            } else {
+                config = {};
+            }
             // We might have gotten redirected here from watch.html, in which
             // case, the parameters for the directions will be empty. Pop open
             // the parameters div so that the user can enter them.
