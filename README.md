@@ -21,20 +21,9 @@ diagram](http://upload.wikimedia.org/wikipedia/commons/9/97/Raspberrypi_pcb_over
 to act as an antenna and compile the `pi_pcm` program on your Raspberry Pi and
 run it as root:
 
-    apt-get -y install scons libjansson-dev
-    scons
-    su
+    make
+    sudo -s
     ./pi_pcm
-
-If you get an error like
-
-    fatal error: jansson.h: No such file or directory compilation terminated.
-
-you'll need to install the Jansson JSON-parsing library. Run:
-
-    apt-get install libjansson-dev
-
-and then try compiling again.
 
 Every RC car I've seen uses a different set of command codes, so you'll need to
 use another program that iterates through possible command codes and watches
@@ -44,9 +33,10 @@ command that caused the car to move.
 To run this search, you'll need a computer with a webcam or an Android phone.
 iPhones won't work because Safari doesn't allow access to the camera.
 Run `./pi_pcm -v` on the  Raspberry Pi so that it can start broadcasting
-commands. Also run `python host_files.py` on the Raspberry Pi, and open a
-browser (Firefox or Chrome have been tested and verified as working) and visit
-https://<Pi-IP-address>:4443/watch.html.
+commands. Also run `python3 host_files.py` on the Raspberry Pi, and open a
+browser either on the Pi or on a separate computer and visit
+https://<Pi-IP-address>:4443/watch.html. Firefox and Chrome have been tested and
+confirmed as working, but Safari will not work.
 
 Place the car in an area where you can control the lighting and avoid changes
 in ambient lighting, such as a closet, and turn the car on. If your car is
@@ -63,21 +53,14 @@ Once the browser sees the car move, the image from the webcam will freeze and
 the parameters of the command that it just broadcast will be preserved.
 
 Now that you have the basic command structure, you can search for the specific
-commands to make it drive. Run
-
-    python control.py -f [frequency] -s [Pi IP address]
-
-The program will prompt you for the values found from the search, and then ask
+commands to make it drive. Visit https://<Pi-IP-address>:4443/control.html.
+This page will prompt you for the values found from the search, and then ask
 you repeatedly to enter different signal bursts. Try entering values from 1-100
 and see how the car reacts.  Certain values should make the car drive some
 combination of forward/reverse + left/right.
 
-Once you have all of the signals, you can save the information in a JSON file.
-See `control-specs/pro-dirt.json` for an example. Now you should be able to run
-
-    python interative_control.py -s [Pi IP address] [JSON control file]
-
-to drive the car using the arrow keys.
+Once you have all of the signals, you can save the information in a JSON file
+and use control.html to control the car.
 
 Signals
 -------

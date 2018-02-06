@@ -19,7 +19,7 @@ else
 	override CFLAGS += ${WARNING_FLAGS} ${C_WARNING_FLAGS}
 endif
 
-LDLIBS := -lm -ljansson
+LDLIBS := -lm
 
 pi_pcm: pi_pcm.o mailbox.o
 
