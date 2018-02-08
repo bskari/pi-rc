@@ -700,7 +700,7 @@ int fill_buffer(
                     assert(0 && "Unknown state");
             }
         }
-        assert(time_us > 0.0f && "Time should be positive");
+        assert(time_us >= 0.0f && "Time should be positive");
 
         ctl_->sample[last_sample++] = (0x5A << 24 | frequency_control);
         if (last_sample == NUM_SAMPLES) {
