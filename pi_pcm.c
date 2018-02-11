@@ -198,7 +198,6 @@ struct dma_cb_t {
     uint32_t info, src, dst, length,
              stride, next, pad[2];
 };
-static struct dma_cb_t* cbp = NULL;
 
 #define BUS_TO_PHYS(x) ((x)&~0xC0000000)
 
@@ -278,7 +277,7 @@ static int fill_buffer(
     struct control_data_s* ctl_,
     const volatile uint32_t* dma_reg_);
 static int frequency_to_control(float frequency);
-static void write_samples(float frequency);
+static struct dma_cb_t* write_samples(struct dma_cb_t* cbp, float frequency);
 static void set_up_signal_handlers(void);
 static void set_up_sockets(int port);
 static void initialize_dma(void);
@@ -311,7 +310,7 @@ int main(int argc, char** argv) {
 }
 
 
-static void write_samples(const float frequency) {
+static struct dma_cb_t* write_samples(struct dma_cb_t* cbp, const float frequency) {
     int i;
     const int frequency_control = frequency_to_control(frequency);
     uint32_t phys_sample_dst = CM_GP0DIV;
@@ -337,6 +336,7 @@ static void write_samples(const float frequency) {
         cbp++;
     }
     cbp--;
+    return cbp;
 }
 
 
@@ -383,10 +383,8 @@ static void initialize_dma(void) {
 
     initialize_mbox();
     ctl = (struct control_data_s*)mbox.virt_addr;
-    cbp = ctl->cb;
-
-    write_samples(DEFAULT_FREQUENCY);
-
+    struct dma_cb_t* cbp = ctl->cb;
+    cbp = write_samples(cbp, DEFAULT_FREQUENCY);
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
 
     /**
