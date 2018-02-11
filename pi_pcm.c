@@ -505,39 +505,39 @@ __attribute__((noreturn)) static void serve_forever(const int verbose) {
       ? tcp_fd
       : udp_fd;
 
+    struct timeval immediate;
+    immediate.tv_sec = 0;
+    immediate.tv_usec = 0;
     while (1) {
         read_fds = master;
-        const int nfds_waiting = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
+        const int nfds_waiting = select(max_fd + 1, &read_fds, NULL, NULL, &immediate);
         if (nfds_waiting < 0) {
             fatal("Select failed: %s\n", strerror(errno));
         }
-        if (nfds_waiting == 0) {
-            // Select timed out
-            continue;
-        }
-
-        int fd;
-        for (fd = 0; fd < max_fd + 1; ++fd) {
-            if (FD_ISSET(fd, &read_fds)) {
-                if (fd == tcp_fd) {
-                    // New connection
-                    int new_fd;
-                    if ((new_fd = accept(tcp_fd, NULL, NULL)) < 0) {
-                        fatal(
-                            "Unable to accept TCP connection: %s\n",
-                            strerror(errno));
-                    }
-                    FD_SET(new_fd, &master);
-                    if (new_fd > max_fd) {
-                        max_fd = new_fd;
-                    }
-                } else {
-                    // Read message
-                    if (read_from_fd(fd, verbose, &command) <= 0) {
-                        close(fd);
-                        FD_CLR(fd, &master);
-                        while (!FD_ISSET(max_fd, &master)) {
-                            --max_fd;
+        if (nfds_waiting > 0) {
+            int fd;
+            for (fd = 0; fd < max_fd + 1; ++fd) {
+                if (FD_ISSET(fd, &read_fds)) {
+                    if (fd == tcp_fd) {
+                        // New connection
+                        int new_fd;
+                        if ((new_fd = accept(tcp_fd, NULL, NULL)) < 0) {
+                            fatal(
+                                "Unable to accept TCP connection: %s\n",
+                                strerror(errno));
+                        }
+                        FD_SET(new_fd, &master);
+                        if (new_fd > max_fd) {
+                            max_fd = new_fd;
+                        }
+                    } else {
+                        // Read message
+                        if (read_from_fd(fd, verbose, &new_command) <= 0) {
+                            close(fd);
+                            FD_CLR(fd, &master);
+                            while (!FD_ISSET(max_fd, &master)) {
+                                --max_fd;
+                            }
                         }
                     }
                 }
@@ -549,12 +549,10 @@ __attribute__((noreturn)) static void serve_forever(const int verbose) {
 #else
         const int used = fill_buffer(command, new_command, ctl, dma_reg);
 #endif
-        if (used > 0) {
-            if (new_command != NULL) {
-                free_command(command);
-                command = new_command;
-                new_command = NULL;
-            }
+        if (used > 0 && new_command != NULL) {
+            free_command(command);
+            command = new_command;
+            new_command = NULL;
         }
 
         usleep(10000);
