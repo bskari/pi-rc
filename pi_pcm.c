@@ -285,8 +285,7 @@ static void initialize_mbox(void);
 static void serve_forever(int verbose);
 static int parse_json(
         const char* json,
-        struct command_node_t** new_command,
-        int* request_response);
+        struct command_node_t** new_command);
 static const char* get_json_token(
         const char* json,
         enum json_token* token,
@@ -719,8 +718,7 @@ static int frequency_to_control(const float frequency) {
 
 static int parse_json(
     const char* json,
-    struct command_node_t** command,
-    int* const request_response
+    struct command_node_t** command
 ) {
     assert(*command == NULL);
 
@@ -976,17 +974,12 @@ static int read_from_fd(
     ) {
         message_buffer[bytes_count] = '\0';
         struct command_node_t* parsed_command = NULL;
-        int request_response = 0;
         char* json_data = message_buffer;
 
         if (verbose) {
             printf("Received message \"%s\"\n", json_data);
         }
-        // TODO: Remove request response, nobody cares
-        const int parse_status = parse_json(
-            json_data,
-            &parsed_command,
-            &request_response);
+        const int parse_status = parse_json(json_data, &parsed_command);
 
         if (parse_status == 0) {
             /**
