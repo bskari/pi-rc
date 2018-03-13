@@ -8,8 +8,6 @@ import sys
 import threading
 
 
-insecure_httpd = None
-secure_httpd = None
 killed = False
 
 
@@ -32,7 +30,11 @@ else:
 
 class InterruptibleServer(Server):
     def __init__(self, server_address, handler):
-        super(InterruptibleServer, self).__init__(server_address, handler)
+        if sys.version_info.major < 3:
+            # Python 2's TCPServer is an old style class
+            Server.__init__(self, server_address, handler)
+        else:
+            super().__init__(server_address, handler)
 
     def serve_until_shutdown(self):
         global killed
@@ -138,7 +140,6 @@ script will now generate a self-signed certificate.'''
 
     secure_port = 4443
     server_address = ('0.0.0.0', secure_port)
-    global secure_httpd
     secure_httpd = InterruptibleServer(server_address, PostCommandsRequestHandler)
     secure_httpd.socket = ssl.wrap_socket(
         secure_httpd.socket,
@@ -150,7 +151,6 @@ script will now generate a self-signed certificate.'''
 
     insecure_port = 8080
     server_address = ('0.0.0.0', insecure_port)
-    global insecure_httpd
     insecure_httpd = InterruptibleServer(server_address, PostCommandsRequestHandler)
 
     try:
