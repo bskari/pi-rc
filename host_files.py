@@ -1,9 +1,17 @@
 """Hosts files from the local directory using SSL."""
 from __future__ import print_function
+import signal
 import socket
 import ssl
 import subprocess
 import sys
+import threading
+
+
+insecure_httpd = None
+secure_httpd = None
+killed = False
+
 
 # pylint: disable=C0411
 if sys.version_info.major < 3:
@@ -20,6 +28,16 @@ else:
     import urllib.request
     urlopen = urllib.request.urlopen
     decode = lambda s: bytes(s, 'utf-8').decode('unicode-escape')
+
+
+class InterruptibleServer(Server):
+    def __init__(self, server_address, handler):
+        super(InterruptibleServer, self).__init__(server_address, handler)
+
+    def serve_until_shutdown(self):
+        global killed
+        while not killed:
+            self.handle_request()
 
 
 class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R0903
@@ -74,8 +92,14 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
             self.end_headers()
 
 
+def kill_servers(*_):
+    global killed
+    killed = True
+
+
 def main():
     """Main."""
+    signal.signal(signal.SIGINT, kill_servers)
     # The URL fetching stuff inherits this timeout
     socket.setdefaulttimeout(0.25)
     # Prevent "address already in use" errors
@@ -110,17 +134,24 @@ script will now generate a self-signed certificate.'''
             '{}.cert'.format(base_cert_file_name)
         ))
 
-    print('Starting server')
-    port = 4443
-    server_address = ('0.0.0.0', port)
-    httpd = Server(server_address, PostCommandsRequestHandler)
-    httpd.socket = ssl.wrap_socket(
-        httpd.socket,
+    print('Starting servers')
+
+    secure_port = 4443
+    server_address = ('0.0.0.0', secure_port)
+    global secure_httpd
+    secure_httpd = InterruptibleServer(server_address, PostCommandsRequestHandler)
+    secure_httpd.socket = ssl.wrap_socket(
+        secure_httpd.socket,
         server_side=True,
         certfile='{}.cert'.format(base_cert_file_name),
         keyfile='{}.key'.format(base_cert_file_name),
         ssl_version=ssl.PROTOCOL_TLSv1
     )
+
+    insecure_port = 8080
+    server_address = ('0.0.0.0', insecure_port)
+    global insecure_httpd
+    insecure_httpd = InterruptibleServer(server_address, PostCommandsRequestHandler)
 
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -132,8 +163,16 @@ script will now generate a self-signed certificate.'''
         ip = 'localhost'
     finally:
         sock.close()
-    print('Running server on https://{}:{}/'.format(ip, port))
-    httpd.serve_forever()
+    print(
+            'Running server on https://{ip}:{secure_port}/ and http://{ip}:{insecure_port}/'.format(
+                ip=ip,
+                secure_port=secure_port,
+                insecure_port=insecure_port
+        )
+    )
+    secure_thread = threading.Thread(target=lambda: secure_httpd.serve_until_shutdown())
+    secure_thread.start()
+    insecure_httpd.serve_until_shutdown()
 
 
 if __name__ == '__main__':
