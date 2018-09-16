@@ -170,6 +170,11 @@ header {
         });
 
         clearPhoto();
+
+        if (document.getElementById('useconds').value === '') {
+            console.log("Setting defaults");
+            setCommand(commandIterator().next().value);
+        }
     }
 
     function alertError(error) {
@@ -224,74 +229,125 @@ header {
         }
     }
 
-    function nextCommand() {
-        var useconds = document.getElementById('useconds').value | 0;
-        var syncRepeats = document.getElementById('sync-repeats').value | 0;
-        var syncMultiplier = document.getElementById('sync-multiplier').value | 0;
-        var signalRepeats = document.getElementById('signal-repeats').value | 0;
-        if (useconds < 100 || useconds > 1201) {
-            useconds = 100;
-        }
-        if (syncRepeats < 2 || syncRepeats > 7) {
-            syncRepeats = 2;
-        }
-        if (syncMultiplier < 2 || syncMultiplier > 7) {
-            syncMultiplier = 2;
-        }
-        if (signalRepeats < 5 || signalRepeats > 50) {
-            signalRepeats = 5;
-        }
-
-        signalRepeats += 1;
-        if (signalRepeats > 50) {
-            signalRepeats = 5;
-            syncRepeats += 1;
-        }
-        if (syncRepeats > 7) {
-            syncRepeats = 2;
-            syncMultiplier += 1;
-        }
-        if (syncMultiplier > 7) {
-            syncMultiplier = 2;
-            useconds += 100;
-        }
-        if (useconds > 1201) {
-            // Nothing more to do, reset everything
-            useconds = 100;
-            syncMultiplier = 2;
-            syncRepeats = 2;
-            signalRepeats = 5;
-            toggleMonitoring();
-        }
-
-        document.getElementById('useconds').value = useconds;
-        document.getElementById('sync-multiplier').value = syncMultiplier;
-        document.getElementById('sync-repeats').value = syncRepeats;
-        document.getElementById('signal-repeats').value = signalRepeats;
+    function commandKey(command) {
+        return JSON.stringify(
+            {
+                u: parseInt(command.uSeconds),
+                s: parseInt(command.syncRepeats),
+                m: parseInt(command.syncMultiplier),
+                sr: parseInt(command.signalRepeats),
+            }
+        )
     }
 
-    function sendCommand() {
-        var command = [];
-        var frequency = parseFloat(document.getElementById('frequency').value);
-        var deadFrequency = frequency < 28 ? 49.860 : 27.095;
-        var useconds = parseInt(document.getElementById('useconds').value);
-        var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
-        var syncRepeats = parseInt(document.getElementById('sync-repeats').value);
-        var signalRepeats = parseInt(document.getElementById('signal-repeats').value);
-        var command = [
+    function* commandIterator() {
+        // Do the most common ones first
+        let signal = {
+            uSeconds: 400,
+            syncRepeats: 4,
+            syncMultiplier: 3,
+            signalRepeats: 10
+        };
+        let used = new Set();
+
+        // This first part is what I've observed from RC cars
+        for (let uSeconds of [400, 500]) {
+            signal.uSeconds = uSeconds;
+            for (let syncRepeats of [4]) {
+                signal.syncRepeats = syncRepeats;
+                for (let syncMultiplier of [3]) {
+                    signal.syncMultiplier = syncMultiplier;
+                    for (let signalRepeats = 10; signalRepeats <= 30; ++signalRepeats) {
+                        signal.signalRepeats = signalRepeats;
+                        used.add(commandKey(signal));
+                        yield signal;
+                    }
+                }
+            }
+        }
+
+        // I guess open it up to more syncRepeats and syncMultipliers
+        for (let uSeconds of [400, 500]) {
+            signal.uSeconds = uSeconds;
+            for (let syncRepeats of [3, 5]) {
+                signal.syncRepeats = syncRepeats;
+                for (let syncMultiplier of [4, 5]) {
+                    signal.syncMultiplier = syncMultiplier;
+                    for (let signalRepeats = 10; signalRepeats <= 30; ++signalRepeats) {
+                        signal.signalRepeats = signalRepeats;
+                        used.add(commandKey(signal));
+                        yield signal;
+                    }
+                }
+            }
+        }
+
+        // Expand the signal repeats
+        for (let uSeconds of [400, 500]) {
+            signal.uSeconds = uSeconds;
+            for (let syncRepeats of [3, 4, 5]) {
+                signal.syncRepeats = syncRepeats;
+                for (let syncMultiplier of [3, 4, 5]) {
+                    signal.syncMultiplier = syncMultiplier;
+                    for (let signalRepeats = 10; signalRepeats <= 65; ++signalRepeats) {
+                        signal.signalRepeats = signalRepeats;
+                        const key = commandKey(signal);
+                        if (used.has(key)) {
+                            continue;
+                        } else {
+                            used.add(key);
+                            yield signal;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Just do everything
+        for (let uSeconds = 100; uSeconds < 1201; uSeconds += 100) {
+            signal.uSeconds = uSeconds;
+            for (let syncRepeats = 2; syncRepeats < 8; ++syncRepeats) {
+                signal.syncRepeats = syncRepeats;
+                for (let syncMultiplier = 2; syncMultiplier < 8; ++syncMultiplier) {
+                    signal.syncMultiplier = syncMultiplier;
+                    for (let signalRepeats = 10; signalRepeats <= 65; ++signalRepeats) {
+                        signal.signalRepeats = signalRepeats;
+                        const key = commandKey(signal);
+                        if (used.has(key)) {
+                            continue;
+                        } else {
+                            yield signal;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    function setCommand(command) {
+        document.getElementById('useconds').value = command.uSeconds;
+        document.getElementById('sync-multiplier').value = command.syncMultiplier;
+        document.getElementById('sync-repeats').value = command.syncRepeats;
+        document.getElementById('signal-repeats').value = command.signalRepeats;
+    }
+
+    function sendCommand(commandObject) {
+        const frequency = parseFloat(document.getElementById('frequency').value);
+        const deadFrequency = frequency < 28 ? 49.860 : 27.095;
+        const command = [
             {
                 frequency: frequency,
                 dead_frequency: deadFrequency,
-                burst_us: useconds * syncMultiplier,
-                spacing_us: useconds,
-                repeats: syncRepeats,
+                burst_us: commandObject.uSeconds * commandObject.syncMultiplier,
+                spacing_us: commandObject.uSeconds,
+                repeats: commandObject.syncRepeats,
             },
             {
                 frequency: frequency,
                 dead_frequency: deadFrequency,
-                burst_us: useconds,
-                spacing_us: useconds,
-                repeats: signalRepeats,
+                burst_us: commandObject.uSeconds,
+                spacing_us: commandObject.uSeconds,
+                repeats: commandObject.signalRepeats,
             }
         ];
 
@@ -441,6 +497,27 @@ header {
             referenceImage = pixels;
             imageChange.value = 0.0;
 
+            let iterator_ = commandIterator();
+            // If we've entered some values, then pick up where we left off
+            const startCommandKey = commandKey({
+                uSeconds: document.getElementById('useconds').value,
+                syncRepeats: document.getElementById('sync-repeats').value,
+                syncMultiplier: document.getElementById('sync-multiplier').value,
+                signalRepeats: document.getElementById('signal-repeats').value,
+            });
+            let skippedCount = 0;
+            let next_ = iterator_.next();
+            while (!next_.done && commandKey(next_.value) !== startCommandKey) {
+                ++skippedCount;
+                next_ = iterator_.next();
+            }
+            if (next_.done) {
+                console.log("Skipped too many commands, resetting");
+                iterator_ = commandIterator();
+            } else if (skippedCount > 0) {
+                console.log("Skipped " + skippedCount + " commands");
+            }
+
             // Use a recursive function with setTimeout instead of setInterval
             // to work around slow devices calculating diff
             (function loop() {
@@ -449,8 +526,12 @@ header {
                 var rawData = context.getImageData(0, 0, width, height);
                 var difference = percentDifference(rawData, referenceImage);
                 imageChange.value = (difference + '').substring(0, 6);
-                nextCommand();
-                sendCommand();
+                next_ = iterator_.next();
+                if (next_.done) {
+                    return;
+                }
+                setCommand(next_.value);
+                sendCommand(next_.value);
 
                 pictureIntervalId = setTimeout(
                     function() {
@@ -458,7 +539,7 @@ header {
                             loop();
                         } else {
                             toggleMonitoring();
-                            saveConfigToWebStorage();
+                            saveConfig();
                             var infoP = document.getElementById('info');
                             while (infoP.childNodes.length > 0) {
                                 infoP.removeChild(infoP.childNodes[0]);
@@ -506,21 +587,12 @@ header {
         return sumDifference / (pixelCount * 256 * 3) * 100;
     }
 
-    function saveConfigToWebStorage() {
-        var frequency = parseFloat(document.getElementById('frequency').value);
-        var useconds = parseInt(document.getElementById('useconds').value);
-        var syncMultiplier = parseInt(document.getElementById('sync-multiplier').value);
-        var syncRepeats = parseInt(document.getElementById('sync-repeats').value);
-        var signalRepeats = parseInt(document.getElementById('signal-repeats').value);
-        var config = JSON.stringify({
-            'frequency': frequency,
-            'synchronization_burst_us': useconds * syncMultiplier,
-            'synchronization_spacing_us': useconds,
-            'total_synchronizations': syncRepeats,
-            'signal_burst_us': useconds,
-            'signal_spacing_us': useconds,
-        });
-        window.localStorage.setItem('piRcConfig', config);
+    function saveConfig() {
+        // Save on the server too
+        var request = new XMLHttpRequest();
+        request.open('POST', window.location.origin + '/save/');
+        request.setRequestHeader('Content-Type', 'application/json');
+        request.send(config);
     }
 
     window.addEventListener('load', startUp, false);
@@ -579,25 +651,25 @@ header {
         <label for="useconds">Useconds</label>
     </div>
     <div class="value">
-        <input id="useconds" class="parameter" value="100" type="number" step="1">
+        <input id="useconds" class="parameter" type="number" step="100">
     </div>
     <div class="label">
         <label for="sync-repeats">Sync repeats</label>
     </div>
     <div class="value">
-        <input id="sync-repeats" class="parameter" value="2" type="number" step="1">
+        <input id="sync-repeats" class="parameter" type="number" step="1">
     </div>
     <div class="label">
         <label for="sync-multiplier">Sync multiplier</label>
     </div>
     <div class="value">
-        <input id="sync-multiplier" class="parameter" value="2" type="number" step="1">
+        <input id="sync-multiplier" class="parameter" type="number" step="1">
     </div>
     <div class="label">
         <label for="signal-repeats">Signal repeats</label>
     </div>
     <div class="value">
-        <input id="signal-repeats" class="parameter" value="5" type="number" step="1">
+        <input id="signal-repeats" class="parameter" type="number" step="1">
     </div>
     <div class="label">
         <label for="image-change">Image change %</label>

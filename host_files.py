@@ -1,3 +1,4 @@
+#!/bin/env python
 """Hosts files from the local directory using SSL."""
 from __future__ import print_function
 import signal
@@ -82,7 +83,7 @@ class PostCommandsRequestHandler(SimpleHTTPRequestHandler):  # pylint: disable=R
 
         elif self.path == '/save/':
             content_length = int(self.headers.get('Content-Length'))
-            post_data = decode(self.rfile.read(content_length)[1:-1])
+            post_data = decode(self.rfile.read(content_length))
             with open('parameters.json', 'w') as parameters_file:
                 parameters_file.write(post_data)
 
