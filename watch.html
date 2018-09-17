@@ -531,6 +531,11 @@ header {
                     return;
                 }
                 setCommand(next_.value);
+                const frequency = parseFloat(document.getElementById('frequency').value);
+                if (frequency > 250) {
+                    alert("pi-rc only supports frequencies below 250 MHz");
+                    return;
+                }
                 sendCommand(next_.value);
 
                 pictureIntervalId = setTimeout(
@@ -539,7 +544,7 @@ header {
                             loop();
                         } else {
                             toggleMonitoring();
-                            saveConfig();
+                            saveConfig(next_.value);
                             var infoP = document.getElementById('info');
                             while (infoP.childNodes.length > 0) {
                                 infoP.removeChild(infoP.childNodes[0]);
@@ -587,12 +592,19 @@ header {
         return sumDifference / (pixelCount * 256 * 3) * 100;
     }
 
-    function saveConfig() {
-        // Save on the server too
+    function saveConfig(config) {
+        const fullConfig = {
+            frequency: parseFloat(document.getElementById('frequency').value),
+            synchronization_burst_us: config.uSeconds * config.syncMultiplier,
+            synchronization_spacing_us: config.uSeconds,
+            total_synchronizations: config.syncRepeats,
+            signal_burst_us: config.uSeconds,
+            signal_spacing_us: config.uSeconds,
+        };
         var request = new XMLHttpRequest();
         request.open('POST', window.location.origin + '/save/');
         request.setRequestHeader('Content-Type', 'application/json');
-        request.send(config);
+        request.send(JSON.stringify(fullConfig));
     }
 
     window.addEventListener('load', startUp, false);
@@ -646,6 +658,23 @@ header {
             <option value="49.875">49.875</option>
             <option value="49.890">49.890</option>
         </select>
+        <a id="other-frequency"
+            href="#"
+            style="font-size: x-small;"
+            onclick="
+                var el = document.getElementById('frequency');
+                var oldValue = el.value;
+                var par = el.parentNode;
+                par.removeChild(el);
+                el = document.createElement('input');
+                el.setAttribute('id', 'frequency');
+                el.value = oldValue;
+                par.appendChild(el);
+                el = document.getElementById('other-frequency');
+                el.parentNode.removeChild(el);
+        ">
+            Manually enter frequency
+        </a>
     </div>
     <div class="label">
         <label for="useconds">Useconds</label>

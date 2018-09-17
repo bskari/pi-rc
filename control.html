@@ -10,6 +10,20 @@
     display: -webkit-flex;
     display: flex;
 }
+.button {
+    opacity: 1;
+    font-size: .875rem;
+    margin-bottom: .5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    padding-top: .5rem;
+    padding-bottom: .5rem;
+    background-color: #000;
+    color: #fff;
+    text-decoration: none;
+    display: inline-block;
+    border-radius: .25rem;
+}
 .control-button {
     border: 1px solid black;
     text-align: center;
@@ -17,6 +31,10 @@
 }
 .unset {
     box-shadow: 0 0 3px red;
+}
+#help {
+    width: 600px;
+    display: none;
 }
     </style>
 
@@ -83,11 +101,14 @@ function loadConfig(config) {
     for (var option in optionToId) {
         if (optionToId.hasOwnProperty(option)) {
             value = config[option];
-            if (value === undefined) {
-                // Let the user know that this still needs to be set
-                document.getElementById(optionToId[option]).classList.add('unset');
-            } else {
-                document.getElementById(optionToId[option]).value = value;
+            const element = document.getElementById(optionToId[option]);
+            if (element !== null) {
+                if (value === undefined) {
+                    // Let the user know that this still needs to be set
+                    element.classList.add('unset');
+                } else {
+                    element.value = value;
+                }
             }
         }
     }
@@ -185,8 +206,10 @@ function toggleOptions(popOpen) {
     var heading = document.getElementById('parameters-heading');
     var text = heading.innerText;
     var options = document.getElementById('parameters-options');
+    var save = document.getElementById('save-options');
 
-    if (popOpen === undefined) {
+    // Was this called from onclick?
+    if (popOpen !== true && popOpen !== false) {
         if (options.style.display === 'none') {
             popOpen = true;
         } else {
@@ -197,9 +220,11 @@ function toggleOptions(popOpen) {
     if (popOpen) {
         heading.innerText = text.substr(0, text.length - 1) + String.fromCharCode(0x25BC);
         options.style.display = 'block';
+        save.style.display = 'inline';
     } else {
         heading.innerText = text.substr(0, text.length - 1) + String.fromCharCode(0x25B2);
         options.style.display = 'none';
+        save.style.display = 'none';
     }
 }
 
@@ -218,6 +243,9 @@ function writeMessage(message) {
 function init(){
 document.getElementById('parameters-heading').addEventListener('click', toggleOptions);
 document.getElementById('parameter-file').addEventListener('change', handleFileSelect);
+document.getElementById('help-header').addEventListener('click', function(event) {
+    document.getElementById('help').style.display = 'block';
+});
 
 loadConfigFromServer();
 
@@ -241,6 +269,30 @@ for (var option in optionToId) {
         evt.target.classList.remove('unset');
     }.bind(this));
 }
+
+document.getElementById("save").addEventListener('click', function(event) {
+    event.preventDefault();
+    let fullConfig = {};
+    for (let option in optionToId) {
+        if (optionToId.hasOwnProperty(option)) {
+            fullConfig[option] = parseFloat(document.getElementById(optionToId[option]).value);
+        }
+    };
+    var request = new XMLHttpRequest();
+    request.onerror = function() {
+        writeMessage("Unable to save configuration");
+    };
+    request.onreadystatechange = function() {
+        console.log(request.readyState);
+        if (request.readyState === XMLHttpRequest.DONE) {
+            writeMessage("Configuration saved");
+        }
+    };
+    request.open('POST', window.location.origin + '/save/');
+    request.setRequestHeader('Content-Type', 'application/json');
+    request.send(JSON.stringify(fullConfig));
+}, false);
+
 }
     </script>
 </head>
@@ -261,7 +313,33 @@ for (var option in optionToId) {
 
     <p id="message"></p>
 
+<h2 id="help-header" class="center">Help &#x25BC;</h2>
+<div id="help" class="center">
+    <p>
+This page will let you control the RC car and search for the individual
+drive commands. Each command (e.g. forward, reverse and left) consists of
+a certain number of repeated signals. Try setting the "forward" input box
+below to different numbers (10-80), and then clicking the up arrow or
+pushing the up arrow on your keyboard and see if the car drives forward.
+When it does, move to the next input box and continue on.
+    </p>
+    <p>
+Most cars receivers have a tolerance, where they will accept a value +/-
+1. Try 3 values and use the middle one. The next command will usually be 6
+or more repeated signals away.
+    </p>
+    <p>
+Once you have all of the commands set, click the "Save parameters" button. The
+next time you load this page, the parameters will be automatically loaded, and
+you can use the arrows at the top or your keyboard's arrow keys to drive the
+car.
+    </p>
+</div>
+
     <h2 id="parameters-heading">Parameters &#x25BC;</h2>
+    <div id="save-options" class="content center" style="display: none;">
+        <a id="save" class="button">Save parameters</a>
+    </div>
     <div id="parameters-options" style="display: none;">
     <table>
         <tr><td><h3>Commands</h3></td></tr>
