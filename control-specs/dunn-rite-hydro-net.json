@@ -1,0 +1,19 @@
+{
+    "name": "Dunn Rite Hydro-Net Pool Skimmer",
+    "description": "https://dunnriteproducts.com/hydro-net/",
+    "frequency": 27.15,
+    "synchronization_burst_us": 1500,
+    "synchronization_spacing_us": 500,
+    "total_synchronizations": 4,
+    "signal_burst_us": 500,
+    "signal_spacing_us": 500,
+
+    "forward": 46,
+    "forward_left": 34,
+    "forward_right": 52,
+    "left": 0,
+    "reverse": 28,
+    "reverse_left": 10,
+    "reverse_right": 40,
+    "right": 0
+}
