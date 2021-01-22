@@ -460,20 +460,17 @@ header {
             }
             video.play();
         }
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia(videoOptions).then(setVideoSource).catch(alertError);
-        } else {
-            var getUserMedia = (
-                navigator.getUserMedia ||
-                navigator.webkitGetUserMedia ||
-                navigator.mozGetUserMedia ||
-                navigator.msGetUserMedia);
-            if (getUserMedia === undefined) {
-                alert('This browser does not support video');
-            } else {
-                getUserMedia(videoOptions, setVideoSource, alertError);
-            }
+        let constraints = {
+            video: true
         }
+        let media = navigator.mediaDevices.getUserMedia(constraints);
+        navigator.mediaDevices.getUserMedia(videoOptions).then(setVideoSource).catch(function(error) {
+                console.log(error.name);
+                if (error.name == "NotAllowedError") {
+                    window.alert("Camera access has been refused");
+                }
+            }
+        );
         pictureIntervalId = setInterval(takePicture, 1000);
     }
 
