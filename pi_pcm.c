@@ -120,10 +120,10 @@
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
 #elif (RASPI)==4
-#define PERIPH_VIRT_BASE 0xFE000000
+#define PERIPH_VIRT_BASE 0xfe000000
 #define PERIPH_PHYS_BASE 0x7e000000
-#define DRAM_PHYS_BASE 0x40000000
-#define MEM_FLAG 0x0c
+#define DRAM_PHYS_BASE 0xc0000000
+#define MEM_FLAG 0x04
 #elif (TEST_COMPILATION)==1
 #define PERIPH_VIRT_BASE 0x0
 #define PERIPH_PHYS_BASE 0x0
@@ -377,8 +377,8 @@ static void initialize_dma(void) {
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
     gpio_reg = map_peripheral(GPIO_VIRT_BASE, GPIO_LEN);
 
-    /* GPIO4 needs to be ALT FUNC 0 to otuput the clock */
-    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 3)) | (2 << 3);
+    /* GPIO21 needs to be ALT FUNC 0 to otuput the clock */
+    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 3)) | (1 << 3);
 
     /* Program GPCLK to use MASH setting 1, so fractional dividers work */
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 6;
