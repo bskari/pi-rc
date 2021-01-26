@@ -377,8 +377,8 @@ static void initialize_dma(void) {
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
     gpio_reg = map_peripheral(GPIO_VIRT_BASE, GPIO_LEN);
 
-    /* GPIO21 needs to be ALT FUNC 0 to otuput the clock */
-    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 3)) | (1 << 3);
+     // GPIO21 needs to be ALT FUNC 5 to output the clock
+    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 3)) | (2 << 3);
 
     /* Program GPCLK to use MASH setting 1, so fractional dividers work */
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 6;
