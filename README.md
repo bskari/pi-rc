@@ -6,10 +6,16 @@ cars without any additional hardware. With it, you should be able to drive just
 about any cheap toy-grade RC car programmatically with your Raspberry Pi.
 
 Note that running this program turns your Pi into a rather powerful radio
-transmitter. Do not use this code unless you understand what it does, what
-frequencies it might interfere with, what frequencies are allowed, what is
-legal in your country, etc. I assume no responsibility for your actions or for
-any problems running this program may cause.
+transmitter, and it spews some interference all over the wireless spectrum.
+I wrote this before I knew much about radio, and I kind of regret it now,
+because it is creates harmful interference. You should not use it. If you
+still want to, you should add a
+[lowpass filter](https://www.dk0tu.de/blog/2016/05/28_Raspberry_Pi_Lowpass_Filters/) 
+to try to reduce this interference, and don't install an antenna so that
+its range and radiation is limited. Use as short an antenna as possible. I'm
+fairly certain it's not legal to run this program, and while you might not
+get caught doing it occasionally or intermittently, if you create enough
+interference, you will be eventually.
 
 Getting started
 ---------------
