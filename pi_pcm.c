@@ -119,6 +119,11 @@
 #define PERIPH_PHYS_BASE 0x7e000000
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
+#elif (RASPI)==4
+#define PERIPH_VIRT_BASE 0xfe000000
+#define PERIPH_PHYS_BASE 0x7e000000
+#define DRAM_PHYS_BASE 0xc0000000
+#define MEM_FLAG 0x04
 #elif (TEST_COMPILATION)==1
 #define PERIPH_VIRT_BASE 0x0
 #define PERIPH_PHYS_BASE 0x0
@@ -170,10 +175,10 @@
 #define PWMCLK_CNTL     40
 #define PWMCLK_DIV      41
 
-#define GPCLK_CNTL      (0x70/4)
-#define GPCLK_DIV       (0x74/4)
+#define GPCLK_CNTL      (0x78/4)
+#define GPCLK_DIV       (0x7c/4)
 
-#define CM_GP0DIV (0x7e101074)
+#define CM_GP0DIV (0x7e10107c)
 
 #define PWMCTL_MODE1        (1<<1)
 #define PWMCTL_PWEN1        (1<<0)
@@ -187,7 +192,7 @@
  */
 #define PWMDMAC_THRSHLD     ((15<<8)|(15<<0))
 
-#define GPFSEL0         (0x00/4)
+#define GPFSEL0         (0x08/4)
 
 #define BUFFER_SIZE 20000
 
@@ -372,8 +377,8 @@ static void initialize_dma(void) {
     clk_reg = map_peripheral(CLK_VIRT_BASE, CLK_LEN);
     gpio_reg = map_peripheral(GPIO_VIRT_BASE, GPIO_LEN);
 
-    /* GPIO4 needs to be ALT FUNC 0 to otuput the clock */
-    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 12)) | (4 << 12);
+     // GPIO21 needs to be ALT FUNC 5 to output the clock
+    gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 3)) | (2 << 3);
 
     /* Program GPCLK to use MASH setting 1, so fractional dividers work */
     clk_reg[GPCLK_CNTL] = 0x5A << 24 | 6;
